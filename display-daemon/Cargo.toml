@@ -1,0 +1,16 @@
+[package]
+name = "display-daemon"
+version = "0.1.0"
+authors = ["CalebLBaker <calebbaker774@gmail.com>"]
+edition = "2018"
+
+[lib]
+path = "src/arch/x86_64/lib.rs"
+
+[dependencies]
+volatile = "0.2.6"
+spin = "0.5.2"
+[dependencies.lazy_static]
+version = "1.4.0"
+features = ["spin_no_std"]
+

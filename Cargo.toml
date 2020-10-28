@@ -1,0 +1,13 @@
+[workspace]
+
+members = [
+    "kernel",
+    "display-daemon"
+]
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+
