@@ -9,7 +9,7 @@ pub unsafe fn init() {
     PICS.lock().initialize();
 }
 
-pub extern "x86-interrupt" fn keyboard_interrupt(_: &mut x86_64::structures::idt::InterruptStackFrame) {
+pub extern "x86-interrupt" fn keyboard_interrupt_handler(_: &mut x86_64::structures::idt::InterruptStackFrame) {
     let _ = display_daemon::WRITER.lock().write_str("k");
     let mut pic = PICS.lock();
     unsafe {

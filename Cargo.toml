@@ -2,7 +2,8 @@
 
 members = [
     "kernel",
-    "display-daemon"
+    "display-daemon",
+    "multiboot2-elf64"
 ]
 
 [profile.dev]

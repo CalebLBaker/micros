@@ -41,7 +41,9 @@ lazy_static! {
         unsafe {
             double_fault_interrupt.set_stack_index(DOUBLE_FAULT_IST_INDEX);
         }
+        idt.page_fault.set_handler_fn(page_fault_handler);
         idt[pic::InterruptIndex::Timer as usize].set_handler_fn(pic::timer_interrupt_handler);
+        idt[pic::InterruptIndex::Keyboard as usize].set_handler_fn(pic::keyboard_interrupt_handler);
         idt
     };
 }

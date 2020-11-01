@@ -9,6 +9,7 @@ crate-type = ["staticlib"]
 
 [dependencies]
 display-daemon = { path = "../display-daemon" }
+multiboot2 = { path = "../multiboot2-elf64" }
 x86_64 = "0.12.2"
 pic8259_simple = "0.2.0"
 spin = "0.5.2"

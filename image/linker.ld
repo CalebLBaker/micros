@@ -14,7 +14,6 @@ SECTIONS
         *(.text)
     }
 
-    /*
     .rodata BLOCK(4K) : ALIGN (4K)
     {
         *(.rodata)
@@ -30,6 +29,9 @@ SECTIONS
         *(COMMON)
         *(.bss)
     }
-    */
+
+    .kernelend BLOCK(4K) : ALIGN(4K)
+    {
+    }
 }
 
