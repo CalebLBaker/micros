@@ -4,6 +4,25 @@ use lazy_static::lazy_static;
 use core::fmt::Write;
 use x86_64::structures;
 use structures::idt;
+// use core::ops::BitOr;
+
+pub use structures::paging::page_table::PageTableFlags;
+pub use structures::paging::page_table::PageTable;
+pub use structures::paging::page_table::PageTableEntry;
+
+pub const PAGE_SIZE : usize = 4 * 1024;
+
+pub const ENTRIES_PER_PAGE_TABLE : usize = 512;
+pub const INITIAL_NUM_PAGE_TABLES : usize = 4;
+pub const KERNEL_PAGE_SIZE : usize = ENTRIES_PER_PAGE_TABLE * PAGE_SIZE;
+pub const KERNEL_PAGE_TABLE_DEPTH : usize = 3;
+
+pub fn kernel_page_table_flags() -> PageTableFlags { PageTableFlags::PRESENT | PageTableFlags::WRITABLE }
+
+pub fn kernel_page_flags() -> PageTableFlags { kernel_page_table_flags() | PageTableFlags::HUGE_PAGE }
+
+// pub const KERNEL_PAGE_TABLE_FLAGS : PageTableFlags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE;
+// pub const KERNEL_PAGE_FLAGS : PageTableFlags = KERNEL_PAGE_TABLE_FLAGS | PageTableFlags::HUGE_PAGE;
 
 pub fn init() {
     GDT.0.load();
@@ -26,9 +45,29 @@ pub fn halt() -> ! {
     }
 }
 
+pub fn get_root_page_table() -> *mut PageTable {
+    unsafe { &mut p4_table as *mut PageTable }
+}
+
+impl super::super::PageTableEntry for PageTableEntry {
+    fn set(&mut self, address: usize, flags: PageTableFlags) {
+        self.set_addr(x86_64::addr::PhysAddr::new_truncate(address as u64), flags);
+    }
+}
+
+impl<'a> super::super::PageTable<'a> for PageTable {
+    type EntryIterator = impl Iterator<Item = &'a mut PageTableEntry>;
+    fn iter_mut(&'a mut self) -> Self::EntryIterator { self.iter_mut() }
+    fn get_page_table(&mut self, index: usize) -> *mut Self { self[index].addr().as_u64() as *mut PageTable }
+}
+
 struct Selectors {
     code_selector: structures::gdt::SegmentSelector,
     tss_selector: structures::gdt::SegmentSelector,
+}
+
+extern {
+    static mut p4_table: PageTable;
 }
 
 const DOUBLE_FAULT_IST_INDEX: u16 = 0;

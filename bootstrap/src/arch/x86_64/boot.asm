@@ -36,6 +36,7 @@ NO_KERNEL    equ "9"
 ; Declare a multiboot header that marks the program as a kernel.
 ; Format is documented in the multiboot standard
 ; Must be in the first 8 kB of kernel file, 32-bit aligned
+global header_start
 section .multiboot_header
 align 8
 header_start:
@@ -52,6 +53,7 @@ header_start:
     dd 8 ; size
 header_end:
 
+global p4_table
 section .bss
 ; Page tables
 align PAGE_SIZE
@@ -192,7 +194,7 @@ stop:
     jmp stop
 
 ; Let the kernel know where its end is
-global kernelend
-section .kernelend
-kernelend:
+global kernel_end
+section .kernel_end
+kernel_end:
 
