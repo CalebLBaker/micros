@@ -1,6 +1,7 @@
 #![no_std]
 #![feature(abi_x86_interrupt)]
 #![feature(type_alias_impl_trait)]
+#![feature(ptr_internals)]
 
 use display_daemon;
 use core::fmt::Write;
@@ -12,52 +13,60 @@ use arch::x86_64 as proc;
 #[no_mangle]
 pub extern "C" fn main(multiboot_info_ptr: u32) -> ! {
     let mut frame_allocator = FrameAllocator{ next: None, };
-    proc::init();
-    let _ = write!(display_daemon::WRITER.lock(), "address: {}\n", multiboot_info_ptr);
+    if proc::init() {
+        let _ = write!(display_daemon::WRITER.lock(), "address: {}\n", multiboot_info_ptr);
 
-    // Initialize available memory and set up page tables
-    let boot_info = unsafe { multiboot2::load(multiboot_info_ptr as usize) };
-    if let Some(memory_map_tag) = boot_info.memory_map_tag() {
+        // Initialize available memory and set up page tables
+        let boot_info = unsafe { multiboot2::load(multiboot_info_ptr as usize) };
+        if let Some(memory_map_tag) = boot_info.memory_map_tag() {
 
-        let mut physical_memory_size = 0;
-        let kernel_start = unsafe { &header_start } as *const u8 as usize;
-        let kernel_end_addr = unsafe { &kernel_end } as *const u8 as usize;
-        let boot_info_start = boot_info.start_address();
-        let initial_num_pages = proc::ENTRIES_PER_PAGE_TABLE * proc::INITIAL_NUM_PAGE_TABLES;
-        let virtual_memory_size = proc::KERNEL_PAGE_SIZE * initial_num_pages;
+            let mut physical_memory_size = 0;
+            let kernel_start = unsafe { &header_start } as *const u8 as usize;
+            let kernel_end_addr = unsafe { &kernel_end } as *const u8 as usize;
+            let boot_info_start = boot_info.start_address();
+            let boot_info_end = boot_info.end_address();
+            let initial_num_pages = proc::ENTRIES_PER_PAGE_TABLE * proc::INITIAL_NUM_PAGE_TABLES;
+            let virtual_memory_size = proc::KERNEL_PAGE_SIZE * initial_num_pages;
 
-        // Add free frames from first 4 GB to available frame list
-        for memory_area in available_memory_areas(memory_map_tag) {
-            let mut region_end = memory_area.end_address() as usize % proc::PAGE_SIZE;
-            physical_memory_size = max(physical_memory_size, region_end);
-            region_end = min(region_end, virtual_memory_size);
-            let region_start = first_full_page_address(memory_area.start_address());
-            for page in (region_start .. region_end).step_by(proc::PAGE_SIZE) {
-                // Make sure this page isn't part of the kernel
-                let doesnt_overlap_boot_info = doesnt_overlap(page, boot_info_start, boot_info.end_address());
-                if doesnt_overlap(page, kernel_start, kernel_end_addr) && doesnt_overlap_boot_info {
-                    let page_ptr = page as *mut FrameAllocator;
-                    unsafe {
-                        (*page_ptr).next = frame_allocator.next;
-                        frame_allocator.next = Some(&mut *page_ptr);
+            // Add free frames from first 4 GB to available frame list
+            for memory_area in available_memory_areas(memory_map_tag) {
+                let mut region_end = memory_area.end_address() as usize % proc::PAGE_SIZE;
+                physical_memory_size = max(physical_memory_size, region_end);
+                region_end = min(region_end, virtual_memory_size);
+                let region_start = first_full_page_address(memory_area.start_address());
+                for page in (region_start .. region_end).step_by(proc::PAGE_SIZE) {
+                    // Make sure this page isn't part of the kernel
+                    let doesnt_overlap_boot_info = doesnt_overlap(page, boot_info_start, boot_info_end);
+                    if doesnt_overlap(page, kernel_start, kernel_end_addr) && doesnt_overlap_boot_info {
+                        frame_allocator.add_frame(page);
                     }
                 }
             }
-        }
         
-        // Set up memory past 4 GB
-        let mut page_table_indices = [1; proc::KERNEL_PAGE_TABLE_DEPTH - 1];
-        let depth = proc::KERNEL_PAGE_TABLE_DEPTH - 2;
-        page_table_indices[depth] = proc::INITIAL_NUM_PAGE_TABLES;
-        let root_page_table = unsafe { &mut *proc::get_root_page_table() };
-        let memory_state = MemoryState{
-            max_available_address: virtual_memory_size,
-            virtual_memory_size: virtual_memory_size,
-        };
-        let new_memory_state = root_page_table.identity_map(&mut frame_allocator, &memory_map_tag, memory_state, physical_memory_size, &mut page_table_indices);
-        frame_allocator.add_frames(&memory_map_tag, new_memory_state);
+            // Set up memory past 4 GB
+            let mut page_table_indices = [1; proc::KERNEL_PAGE_TABLE_DEPTH - 1];
+            let depth = proc::KERNEL_PAGE_TABLE_DEPTH - 2;
+            page_table_indices[depth] = proc::INITIAL_NUM_PAGE_TABLES;
+            let root_page_table = unsafe { &mut *proc::get_root_page_table() };
+            let memory_state = MemoryState{
+                max_available_address: virtual_memory_size,
+                virtual_memory_size: virtual_memory_size,
+            };
+            let new_memory_state = root_page_table.identity_map(&mut frame_allocator, &memory_map_tag, memory_state, physical_memory_size, &mut page_table_indices);
+            frame_allocator.add_frames(&memory_map_tag, new_memory_state);
+
+            // Reclaim memory used by boot info struct
+            for frame in ((boot_info_start % proc::PAGE_SIZE) .. boot_info_end).step_by(proc::PAGE_SIZE) {
+                frame_allocator.add_frame(frame);
+            }
+
+            let _ = display_daemon::WRITER.lock().write_str("Memory Initialized\n");
+        }
+        let _ = display_daemon::WRITER.lock().write_str("Everything seems to be working . . . \n");
     }
-    let _ = display_daemon::WRITER.lock().write_str("Everything seems to be working . . . \n");
+    else {
+        let _ = display_daemon::WRITER.lock().write_str("Failed to initialize processor state\n");
+    }
     proc::halt()
 }
 
@@ -133,12 +142,7 @@ impl FrameAllocator {
             let region_start_pre_clamp = first_full_page_address(memory_area.start_address());
             let region_start = max(region_start_pre_clamp, memory_state.max_available_address);
             for page in (region_start .. region_end).step_by(proc::PAGE_SIZE) {
-                // Make sure this page isn't part of the kernel
-                let page_ptr = page as *mut FrameAllocator;
-                unsafe {
-                    (*page_ptr).next = self.next;
-                    self.next = Some(&mut *page_ptr);
-                }
+                self.add_frame(page);
             }
         }
     }
@@ -151,6 +155,14 @@ impl FrameAllocator {
         else {
             self.add_frames(memory_map, memory_state);
             (None, memory_state.virtual_memory_size)
+        }
+    }
+
+    fn add_frame(&mut self, frame_address: usize) {
+        let frame_ptr = frame_address as *mut FrameAllocator;
+        unsafe {
+            (*frame_ptr).next = self.next;
+            self.next = Some(&mut *frame_ptr);
         }
     }
 }

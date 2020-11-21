@@ -11,7 +11,7 @@ crate-type = ["staticlib"]
 display-daemon = { path = "../display-daemon" }
 multiboot2 = "0.10.1"
 x86_64 = "0.12.2"
-pic8259_simple = "0.2.0"
+x2apic = { git = "https://github.com/Lucky4Luuk/x2apic-rs" }
 spin = "0.5.2"
 [dependencies.lazy_static]
 version = "1.4.0"

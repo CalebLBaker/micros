@@ -1,10 +1,9 @@
-mod pic;
+mod apic;
 
 use lazy_static::lazy_static;
 use core::fmt::Write;
 use x86_64::structures;
 use structures::idt;
-// use core::ops::BitOr;
 
 pub use structures::paging::page_table::PageTableFlags;
 pub use structures::paging::page_table::PageTable;
@@ -21,10 +20,7 @@ pub fn kernel_page_table_flags() -> PageTableFlags { PageTableFlags::PRESENT | P
 
 pub fn kernel_page_flags() -> PageTableFlags { kernel_page_table_flags() | PageTableFlags::HUGE_PAGE }
 
-// pub const KERNEL_PAGE_TABLE_FLAGS : PageTableFlags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE;
-// pub const KERNEL_PAGE_FLAGS : PageTableFlags = KERNEL_PAGE_TABLE_FLAGS | PageTableFlags::HUGE_PAGE;
-
-pub fn init() {
+pub fn init() -> bool {
     GDT.0.load();
     let code_selector = GDT.1.code_selector;
     let tss_selector = GDT.1.tss_selector;
@@ -33,10 +29,13 @@ pub fn init() {
         x86_64::instructions::tables::load_tss(tss_selector);
     }
     IDT.load();
-    unsafe {
-        pic::init();
+    if unsafe { apic::init() } {
+        x86_64::instructions::interrupts::enable();
+        true
     }
-    x86_64::instructions::interrupts::enable();
+    else {
+        false
+    }
 }
 
 pub fn halt() -> ! {
@@ -81,8 +80,9 @@ lazy_static! {
             double_fault_interrupt.set_stack_index(DOUBLE_FAULT_IST_INDEX);
         }
         idt.page_fault.set_handler_fn(page_fault_handler);
-        idt[pic::InterruptIndex::Timer as usize].set_handler_fn(pic::timer_interrupt_handler);
-        idt[pic::InterruptIndex::Keyboard as usize].set_handler_fn(pic::keyboard_interrupt_handler);
+        idt[apic::InterruptIndex::Timer as usize].set_handler_fn(apic::timer_interrupt_handler);
+        idt[apic::InterruptIndex::Spurious as usize].set_handler_fn(apic::spurious_interrupt_handler);
+        idt[apic::InterruptIndex::Error as usize].set_handler_fn(apic::error_interrupt_handler);
         idt
     };
 }
