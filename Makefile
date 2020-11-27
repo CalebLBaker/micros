@@ -22,7 +22,7 @@ clean:
 	@rm Cargo.lock
 
 run: $(iso)
-	@qemu-system-x86_64 -cdrom $(iso)
+	@qemu-kvm -cdrom $(iso)
 
 $(kernel): $(kernel_source_files) $(display_source_files) Cargo.toml kernel/Cargo.toml display-daemon/Cargo.toml
 	@cargo build --target kernel/arch/$(arch)/$(target).json --release

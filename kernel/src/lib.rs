@@ -13,8 +13,8 @@ use arch::x86_64 as proc;
 #[no_mangle]
 pub extern "C" fn main(multiboot_info_ptr: u32) -> ! {
     let mut frame_allocator = FrameAllocator{ next: None, };
+
     if proc::init() {
-        let _ = write!(display_daemon::WRITER.lock(), "address: {}\n", multiboot_info_ptr);
 
         // Initialize available memory and set up page tables
         let boot_info = unsafe { multiboot2::load(multiboot_info_ptr as usize) };

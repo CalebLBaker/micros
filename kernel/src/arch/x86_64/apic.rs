@@ -34,7 +34,6 @@ pub extern "x86-interrupt" fn error_interrupt_handler(_: &mut x86_64::structures
 }
 
 pub extern "x86-interrupt" fn timer_interrupt_handler(_: &mut x86_64::structures::idt::InterruptStackFrame) {
-    let _ = display_daemon::WRITER.lock().write_str(".");
     unsafe { end_interrupt(); }
 }
 
@@ -44,7 +43,10 @@ lazy_static! {
     pub static ref LOCAL_APIC: spin::Mutex<Option<x2apic::lapic::LocalApic>> = spin::Mutex::new(
         match x2apic::lapic::LocalApicBuilder::new().timer_vector(InterruptIndex::Timer as usize).error_vector(InterruptIndex::Error as usize).spurious_vector(InterruptIndex::Spurious as usize).build() {
             Ok(ret) => Some(ret),
-            _ => None,
+            Err(message) => {
+                let _ = display_daemon::WRITER.lock().write_str(message);
+                None
+            }
         }
     );
 }
