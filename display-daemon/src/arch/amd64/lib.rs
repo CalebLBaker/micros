@@ -1,6 +1,6 @@
 #![no_std]
 
-use core::fmt;
+use core::{fmt, ptr::write_volatile};
 use lazy_static::lazy_static;
 
 #[allow(dead_code)]
@@ -45,15 +45,10 @@ struct ScreenChar {
 const BUFFER_HEIGHT: usize = 25;
 const BUFFER_WIDTH: usize = 80;
 
-#[repr(transparent)]
-struct Buffer {
-    chars: [volatile::Volatile<ScreenChar>; BUFFER_WIDTH * BUFFER_HEIGHT],
-}
-
 pub struct Writer {
     position: usize,
     color_code: ColorCode,
-    buffer: &'static mut Buffer,
+    buffer: *mut ScreenChar,
 }
 
 impl Writer {
@@ -61,11 +56,19 @@ impl Writer {
         match byte {
             b'\n' => self.position += BUFFER_WIDTH - self.position % BUFFER_WIDTH,
             _ => {
-                self.buffer.chars[self.position].write(ScreenChar {
-                    ascii_character: byte,
-                    color_code: self.color_code
-                });
+                unsafe {
+                    write_volatile(
+                        self.buffer.add(self.position),
+                        ScreenChar {
+                            ascii_character: byte,
+                            color_code: self.color_code,
+                        },
+                    );
+                }
                 self.position += 1;
+                if self.position >= BUFFER_HEIGHT * BUFFER_WIDTH {
+                    self.position = 0;
+                }
             }
         }
     }
@@ -73,21 +76,31 @@ impl Writer {
         Writer {
             position: pos,
             color_code: color,
-            buffer: unsafe { &mut *(0xb8000 as *mut Buffer) },
+            buffer: 0xb8000 as *mut ScreenChar,
         }
     }
     pub fn write_str(&mut self, s: &str) -> fmt::Result {
-        for byte in s.bytes() { self.write_byte(byte); }
+        for byte in s.bytes() {
+            self.write_byte(byte);
+        }
         Ok(())
     }
-    pub fn default() -> Writer { Writer::new(0, ColorCode::new(Color::White, Color::Black)) }
 }
 
+impl Default for Writer {
+    fn default() -> Self {
+        Writer::new(0, ColorCode::new(Color::White, Color::Black))
+    }
+}
+
+unsafe impl Send for Writer {}
+
 impl fmt::Write for Writer {
-  fn write_str(&mut self, s: &str) -> fmt::Result { self.write_str(s) }
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        self.write_str(s)
+    }
 }
 
 lazy_static! {
     pub static ref WRITER: spin::Mutex<Writer> = spin::Mutex::new(Writer::default());
 }
-

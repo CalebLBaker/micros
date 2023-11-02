@@ -2,18 +2,14 @@
 name = "kernel"
 version = "0.1.0"
 authors = ["CalebLBaker <calebbaker774@gmail.com>"]
-edition = "2018"
+edition = "2021"
 
 [lib]
 crate-type = ["staticlib"]
 
 [dependencies]
 display-daemon = { path = "../display-daemon" }
-multiboot2 = "0.10.1"
-x86_64 = "0.12.2"
-x2apic = { git = "https://github.com/Lucky4Luuk/x2apic-rs" }
-spin = "0.5.2"
-[dependencies.lazy_static]
-version = "1.4.0"
-features = ["spin_no_std"]
-
+x86_64 = "^0.14"
+x2apic = "^0.4"
+spin = "^0.9"
+multiboot2 = { version = "^0.19", default-features = false }

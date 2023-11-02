@@ -138,9 +138,10 @@ _start:
     mov edx, NUM_P2_TABLES * PAGE_SIZE
     add edx, ecx ; edx is the address of the end of the last table to edit
     xor ebx, ebx ; ebx is the address of the page frame to map to
+
 .map_p2_table:
     mov eax, ebx
-    mov ebx, HUGE_PAGE_SIZE
+    add ebx, HUGE_PAGE_SIZE
     or eax, PRESENT_WRITABLE_HUGE
     mov [ecx], eax
     add ecx, PAGE_TABLE_ENTRY_SIZE
@@ -195,6 +196,6 @@ stop:
 
 ; Let the kernel know where its end is
 global kernel_end
-section .kernel_end
+section .kernelend
 kernel_end:
 

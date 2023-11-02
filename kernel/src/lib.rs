@@ -1,205 +1,428 @@
 #![no_std]
+#![feature(impl_trait_in_assoc_type)]
 #![feature(abi_x86_interrupt)]
-#![feature(type_alias_impl_trait)]
-#![feature(ptr_internals)]
 
-use display_daemon;
-use core::fmt::Write;
+use core::{
+    cmp::{max, min},
+    fmt::Write,
+    iter::StepBy,
+    ops::Range,
+    panic::PanicInfo,
+};
+use display_daemon::WRITER;
+
+use multiboot2::{
+    BootInformation, BootInformationHeader, MbiLoadError, MemoryArea, MemoryAreaType, MemoryMapTag,
+};
 
 mod arch;
 
-use arch::x86_64 as proc;
+use arch::amd64::Amd64;
 
 #[no_mangle]
 pub extern "C" fn main(multiboot_info_ptr: u32) -> ! {
-    let mut frame_allocator = FrameAllocator{ next: None, };
-
-    if proc::init() {
-
-        // Initialize available memory and set up page tables
-        let boot_info = unsafe { multiboot2::load(multiboot_info_ptr as usize) };
-        if let Some(memory_map_tag) = boot_info.memory_map_tag() {
-
-            let mut physical_memory_size = 0;
-            let kernel_start = unsafe { &header_start } as *const u8 as usize;
-            let kernel_end_addr = unsafe { &kernel_end } as *const u8 as usize;
-            let boot_info_start = boot_info.start_address();
-            let boot_info_end = boot_info.end_address();
-            let initial_num_pages = proc::ENTRIES_PER_PAGE_TABLE * proc::INITIAL_NUM_PAGE_TABLES;
-            let virtual_memory_size = proc::KERNEL_PAGE_SIZE * initial_num_pages;
-
-            // Add free frames from first 4 GB to available frame list
-            for memory_area in available_memory_areas(memory_map_tag) {
-                let mut region_end = memory_area.end_address() as usize % proc::PAGE_SIZE;
-                physical_memory_size = max(physical_memory_size, region_end);
-                region_end = min(region_end, virtual_memory_size);
-                let region_start = first_full_page_address(memory_area.start_address());
-                for page in (region_start .. region_end).step_by(proc::PAGE_SIZE) {
-                    // Make sure this page isn't part of the kernel
-                    let doesnt_overlap_boot_info = doesnt_overlap(page, boot_info_start, boot_info_end);
-                    if doesnt_overlap(page, kernel_start, kernel_end_addr) && doesnt_overlap_boot_info {
-                        frame_allocator.add_frame(page);
-                    }
+    match unsafe { boot_os::<Amd64>(multiboot_info_ptr) } {
+        Ok(()) => {
+            let _ = WRITER
+                .lock()
+                .write_str("Everything seems to be working . . . \n");
+        }
+        Err(err) => {
+            let _ = WRITER.lock().write_str(match err {
+                Error::MultibootHeaderLoad(MbiLoadError::IllegalAddress) => {
+                    "Illegal multiboot info address"
                 }
-            }
-        
-            // Set up memory past 4 GB
-            let mut page_table_indices = [1; proc::KERNEL_PAGE_TABLE_DEPTH - 1];
-            let depth = proc::KERNEL_PAGE_TABLE_DEPTH - 2;
-            page_table_indices[depth] = proc::INITIAL_NUM_PAGE_TABLES;
-            let root_page_table = unsafe { &mut *proc::get_root_page_table() };
-            let memory_state = MemoryState{
-                max_available_address: virtual_memory_size,
-                virtual_memory_size: virtual_memory_size,
-            };
-            let new_memory_state = root_page_table.identity_map(&mut frame_allocator, &memory_map_tag, memory_state, physical_memory_size, &mut page_table_indices);
-            frame_allocator.add_frames(&memory_map_tag, new_memory_state);
-
-            // Reclaim memory used by boot info struct
-            for frame in ((boot_info_start % proc::PAGE_SIZE) .. boot_info_end).step_by(proc::PAGE_SIZE) {
-                frame_allocator.add_frame(frame);
-            }
-
-            let _ = display_daemon::WRITER.lock().write_str("Memory Initialized\n");
-        }
-        let _ = display_daemon::WRITER.lock().write_str("Everything seems to be working . . . \n");
-    }
-    else {
-        let _ = display_daemon::WRITER.lock().write_str("Failed to initialize processor state\n");
-    }
-    proc::halt()
-}
-
-trait PageTableEntry {
-    fn set(&mut self, address: usize, flags: proc::PageTableFlags);
-}
-
-trait PageTable<'a> {
-    
-    type EntryIterator : Iterator<Item = &'a mut proc::PageTableEntry>;
-
-    fn identity_map(&'a mut self, frame_allocator: &mut FrameAllocator, memory_map: &multiboot2::MemoryMapTag, memory_state: MemoryState, physical_memory_size: usize, page_table_indices: &mut[usize]) -> MemoryState {
-        if page_table_indices.is_empty() {
-            let mut address = memory_state.virtual_memory_size;
-            for entry in self.iter_mut() {
-                entry.set(address, proc::kernel_page_flags());
-                address += proc::KERNEL_PAGE_SIZE;
-            }
-            MemoryState { max_available_address: memory_state.max_available_address, virtual_memory_size: address }
-        }
-        else {
-            let index = page_table_indices[0];
-            let num_new_indicies = page_table_indices.len() - 1;
-            let new_indices = &mut page_table_indices[1 .. num_new_indicies];
-            let mut new_memory_state = if index != 0  && !new_indices.is_empty() {
-                let page_table_ptr = self.get_page_table(index - 1);
-                let page_table = unsafe { &mut *page_table_ptr };
-                page_table.identity_map(frame_allocator, &memory_map, memory_state, physical_memory_size, new_indices)
-            }
-            else {
-                memory_state
-            };
-            for entry in self.iter_mut().skip(index) {
-                if new_memory_state.virtual_memory_size > physical_memory_size {
-                    return new_memory_state;
+                Error::MultibootHeaderLoad(MbiLoadError::IllegalTotalSize(_)) => {
+                    "Illegal multiboot info size"
                 }
-                if let (Some(frame_addr), new_max_available_address) = frame_allocator.get_frame_add_if_needed(&memory_map, new_memory_state) {
-                    new_memory_state.max_available_address = new_max_available_address;
-                    entry.set(frame_addr, proc::kernel_page_table_flags());
-                    let frame_ptr = frame_addr as *mut proc::PageTable;
-                    let frame = unsafe { &mut *frame_ptr };
-                    new_memory_state = frame.identity_map(frame_allocator, &memory_map, new_memory_state, physical_memory_size, new_indices);
-                }
-                else {
-                    return new_memory_state;
-                }
-            }
-            page_table_indices[0] = 0;
-            new_memory_state
+                Error::MultibootHeaderLoad(MbiLoadError::NoEndTag) => "No multiboot info end tag",
+                Error::ArchitectureSpecific(err) => err,
+                Error::NoMemoryMap => "No memory map tag in multiboot information",
+            });
         }
     }
-
-    fn get_page_table(&mut self, index: usize) -> *mut Self;
-
-    fn iter_mut(&'a mut self) -> Self::EntryIterator;
+    Amd64::halt()
 }
 
-#[derive(Clone, Copy)]
-struct MemoryState {
-    max_available_address: usize,
-    virtual_memory_size: usize,
+#[panic_handler]
+fn panic(info: &PanicInfo) -> ! {
+    let _ = write!(WRITER.lock(), "{}", info);
+    Amd64::halt()
 }
 
-struct FrameAllocator {
-    next: Option<*mut FrameAllocator>,
-}
-
-impl FrameAllocator {
-    fn add_frames(&mut self, memory_map: &multiboot2::MemoryMapTag, memory_state: MemoryState) {
-        for memory_area in available_memory_areas(memory_map) {
-            let end_address = memory_area.end_address() as usize;
-            let region_end = min(end_address % proc::PAGE_SIZE, memory_state.virtual_memory_size);
-            let region_start_pre_clamp = first_full_page_address(memory_area.start_address());
-            let region_start = max(region_start_pre_clamp, memory_state.max_available_address);
-            for page in (region_start .. region_end).step_by(proc::PAGE_SIZE) {
-                self.add_frame(page);
-            }
-        }
-    }
-
-    fn get_frame_add_if_needed(&mut self, memory_map: &multiboot2::MemoryMapTag, memory_state: MemoryState) -> (Option<usize>, usize) {
-        if let Some(ret) = self.next {
-            self.next = unsafe { &mut *ret }.next;
-            (Some(ret as usize), memory_state.max_available_address)
-        }
-        else {
-            self.add_frames(memory_map, memory_state);
-            (None, memory_state.virtual_memory_size)
-        }
-    }
-
-    fn add_frame(&mut self, frame_address: usize) {
-        let frame_ptr = frame_address as *mut FrameAllocator;
-        unsafe {
-            (*frame_ptr).next = self.next;
-            self.next = Some(&mut *frame_ptr);
-        }
-    }
-}
-
-extern {
+extern "C" {
     // These aren't real variables. We just need the address of the start and end of the kernel
     static header_start: u8;
     static kernel_end: u8;
 }
 
-fn max(x: usize, y: usize) -> usize { if x > y { x } else { y } }
+trait Architecture<'a>: Sized {
+    const KERNEL_PAGE_TABLE_DEPTH: usize;
+    const INITIAL_NUM_PAGE_TABLES: usize;
+    const ENTRIES_PER_PAGE_TABLE: usize;
 
-fn min(x: usize, y: usize) -> usize { if x < y { x } else { y } }
+    const INITIAL_VIRTUAL_MEMORY_SIZE: usize = Self::PageTable::KERNEL_PAGE_SIZE
+        * Self::ENTRIES_PER_PAGE_TABLE
+        * Self::INITIAL_NUM_PAGE_TABLES;
 
-fn available_memory_areas(memory_map: &multiboot2::MemoryMapTag) -> impl Iterator<Item = &multiboot2::MemoryArea> {
-    memory_map.all_memory_areas().filter(|area| {
-        area.typ() == multiboot2::MemoryAreaType::Available || area.typ() == multiboot2::MemoryAreaType::AcpiAvailable
-    })
+    type PageTable: PageTable<'a>;
+
+    type Error;
+
+    unsafe fn init() -> Result<Self, Self::Error>;
+
+    unsafe fn get_root_page_table(self) -> *mut Self::PageTable;
+
+    fn halt() -> !;
 }
 
-fn doesnt_overlap(frame_start: usize, region_start: usize, region_end: usize) -> bool {
-    frame_start > region_end && frame_start + proc::PAGE_SIZE < region_start
-}
+trait PageTable<'a>: Sized + 'a {
+    const PAGE_SIZE: usize;
+    const KERNEL_PAGE_SIZE: usize;
 
-fn first_full_page_address(start_address: u64) -> usize {
-    let start = start_address as usize;
-    let page_offset = start % proc::PAGE_SIZE;
-    if page_offset == 0 {
-        start
-    } else {
-        start + proc::PAGE_SIZE - page_offset
+    type Entry: PageTableEntry;
+
+    type EntryIterator: Iterator<Item = &'a mut Self::Entry>
+    where
+        <Self as PageTable<'a>>::Entry: 'a;
+
+    fn kernel_page_table_flags() -> <Self::Entry as PageTableEntry>::Flags;
+
+    fn kernel_page_flags() -> <Self::Entry as PageTableEntry>::Flags;
+
+    fn get_page_table(&mut self, index: usize) -> *mut Self;
+
+    fn iter_mut(&'a mut self) -> Self::EntryIterator;
+
+    fn pages(start: usize, end: usize) -> StepBy<Range<usize>> {
+        ((start - start % Self::PAGE_SIZE)..end).step_by(Self::PAGE_SIZE)
+    }
+
+    fn populate_as_l1_kernel_page_table(&'a mut self, virtual_memory_size: usize) -> usize {
+        let mut address = virtual_memory_size;
+        for entry in self.iter_mut() {
+            entry.set(address, Self::kernel_page_flags());
+            address += Self::KERNEL_PAGE_SIZE;
+        }
+        address
+    }
+
+    unsafe fn identity_map_entry(
+        entry: &'a mut Self::Entry,
+        frame_allocator: &mut FrameAllocator<'a, Self>,
+        memory_map: &MemoryMapTag,
+        memory_state: MemoryState,
+        remaining_page_table_levels: usize,
+        physical_memory_size: usize,
+    ) -> IdentityMapEntryResult {
+        if memory_state.virtual_memory_size >= physical_memory_size {
+            return IdentityMapEntryResult {
+                memory_state,
+                finished: true,
+            };
+        }
+        let get_frame_response = frame_allocator.get_frame_add_if_needed(memory_map, memory_state);
+        let new_memory_state = MemoryState {
+            virtual_memory_size: memory_state.virtual_memory_size,
+            last_frame_added_to_allocator: get_frame_response.last_frame_added_to_allocator,
+        };
+        match get_frame_response.frame {
+            Some(frame) => {
+                entry.set(frame, Self::kernel_page_table_flags());
+                IdentityMapEntryResult {
+                    memory_state: (*(frame as *mut Self)).identity_map(
+                        frame_allocator,
+                        memory_map,
+                        new_memory_state,
+                        physical_memory_size,
+                        remaining_page_table_levels,
+                    ),
+                    finished: false,
+                }
+            }
+            None => IdentityMapEntryResult {
+                memory_state: new_memory_state,
+                finished: true,
+            },
+        }
+    }
+
+    unsafe fn identity_map(
+        &'a mut self,
+        frame_allocator: &mut FrameAllocator<'a, Self>,
+        memory_map: &MemoryMapTag,
+        memory_state: MemoryState,
+        remaining_page_table_levels: usize,
+        physical_memory_size: usize,
+    ) -> MemoryState {
+        // If this is a L1 page table the delegate to populate_as_l1_kernel_page_table
+        if remaining_page_table_levels == 0 {
+            MemoryState {
+                virtual_memory_size: self
+                    .populate_as_l1_kernel_page_table(memory_state.virtual_memory_size),
+                last_frame_added_to_allocator: memory_state.last_frame_added_to_allocator,
+            }
+        } else {
+            let mut new_memory_state = memory_state;
+            // Populate unpopulated entries
+            for entry in self.iter_mut() {
+                let identity_map_result = Self::identity_map_entry(
+                    entry,
+                    frame_allocator,
+                    memory_map,
+                    memory_state,
+                    remaining_page_table_levels - 1,
+                    physical_memory_size,
+                );
+                if identity_map_result.finished {
+                    return identity_map_result.memory_state;
+                } else {
+                    new_memory_state = identity_map_result.memory_state
+                }
+            }
+            new_memory_state
+        }
+    }
+
+    // Set up page tables so virtual address and physical address are the same
+    unsafe fn identity_map_with_offset(
+        &'a mut self,
+        frame_allocator: &mut FrameAllocator<'a, Self>,
+        memory_map: &MemoryMapTag,
+        memory_state: MemoryState,
+        physical_memory_size: usize,
+        page_table_offsets: &[usize],
+    ) -> MemoryState {
+        // If this is a L1 page table the delegate to populate_as_l1_kernel_page_table
+        if page_table_offsets.is_empty() {
+            MemoryState {
+                virtual_memory_size: self
+                    .populate_as_l1_kernel_page_table(memory_state.virtual_memory_size),
+                last_frame_added_to_allocator: memory_state.last_frame_added_to_allocator,
+            }
+        } else {
+            // If some entries have already been populated then recurse into the last entry to make
+            // sure that it is fully populated
+            let offset = page_table_offsets[0];
+            let remaining_page_table_levels = page_table_offsets.len();
+            let new_offsets = &page_table_offsets[1..remaining_page_table_levels];
+            let mut new_memory_state = if offset != 0 && !new_offsets.is_empty() {
+                (*self.get_page_table(offset - 1)).identity_map_with_offset(
+                    frame_allocator,
+                    memory_map,
+                    memory_state,
+                    physical_memory_size,
+                    new_offsets,
+                )
+            } else {
+                memory_state
+            };
+
+            // Populate unpopulated entries
+            for entry in self.iter_mut().skip(offset) {
+                let identity_map_result = Self::identity_map_entry(
+                    entry,
+                    frame_allocator,
+                    memory_map,
+                    memory_state,
+                    remaining_page_table_levels - 1,
+                    physical_memory_size,
+                );
+                if identity_map_result.finished {
+                    return identity_map_result.memory_state;
+                } else {
+                    new_memory_state = identity_map_result.memory_state
+                }
+            }
+            new_memory_state
+        }
+    }
+
+    fn doesnt_overlap(frame_start: usize, region_start: usize, region_end: usize) -> bool {
+        frame_start > region_end || frame_start + Self::PAGE_SIZE < region_start
+    }
+
+    fn first_full_page_address(start_address: u64) -> usize {
+        let start = start_address as usize;
+        let page_offset = start % Self::PAGE_SIZE;
+        if page_offset == 0 {
+            start
+        } else {
+            start + Self::PAGE_SIZE - page_offset
+        }
     }
 }
 
-#[panic_handler]
-fn panic(info: &core::panic::PanicInfo) -> ! {
-    let _ = write!(display_daemon::WRITER.lock(), "{}", info);
-    proc::halt()
+trait PageTableEntry {
+    type Flags;
+    fn set(&mut self, address: usize, flags: Self::Flags);
 }
 
+struct IdentityMapEntryResult {
+    memory_state: MemoryState,
+    finished: bool,
+}
+
+enum Error<ArchError> {
+    ArchitectureSpecific(ArchError),
+    MultibootHeaderLoad(MbiLoadError),
+    NoMemoryMap,
+}
+
+#[derive(Clone, Copy)]
+struct MemoryState {
+    virtual_memory_size: usize,
+    last_frame_added_to_allocator: usize,
+}
+
+struct FrameAllocator<'a, PageTableT: PageTable<'a>> {
+    next: Option<*mut FrameAllocator<'a, PageTableT>>,
+}
+
+impl<'a, PageTableT: PageTable<'a>> FrameAllocator<'a, PageTableT> {
+    unsafe fn add_frames(&mut self, memory_map: &MemoryMapTag, memory_state: MemoryState) {
+        for page in available_pages_not_in_allocator::<PageTableT>(memory_map, memory_state) {
+            self.add_frame(page);
+        }
+    }
+
+    unsafe fn get_frame(&mut self) -> Option<usize> {
+        let ret = self.next?;
+        self.next = (*ret).next;
+        Some(ret as usize)
+    }
+
+    unsafe fn get_frame_add_if_needed(
+        &mut self,
+        memory_map: &MemoryMapTag,
+        memory_state: MemoryState,
+    ) -> GetFrameResponse {
+        match self.get_frame() {
+            Some(frame) => GetFrameResponse {
+                frame: Some(frame),
+                last_frame_added_to_allocator: memory_state.last_frame_added_to_allocator,
+            },
+            None => {
+                self.add_frames(memory_map, memory_state);
+                GetFrameResponse {
+                    frame: self.get_frame(),
+                    last_frame_added_to_allocator: memory_state.virtual_memory_size,
+                }
+            }
+        }
+    }
+
+    unsafe fn add_frame(&mut self, frame_address: usize) {
+        let frame_ptr = frame_address as *mut Self;
+        (*frame_ptr).next = self.next;
+        self.next = Some(&mut *frame_ptr);
+    }
+}
+
+struct GetFrameResponse {
+    frame: Option<usize>,
+    last_frame_added_to_allocator: usize,
+}
+
+fn unused_page_frames_from_initial_virtual_address_space<'a, 'b, Proc: Architecture<'a> + 'b>(
+    memory_area: &'b MemoryArea,
+    kernel_start: usize,
+    kernel_end_addr: usize,
+    boot_info: &'b BootInformation,
+) -> impl Iterator<Item = usize> + 'b {
+    (Proc::PageTable::first_full_page_address(memory_area.start_address())
+        ..min(
+            memory_area.end_address() as usize,
+            Proc::INITIAL_VIRTUAL_MEMORY_SIZE,
+        ))
+        .step_by(Proc::PageTable::PAGE_SIZE)
+        .filter(move |page| {
+            Proc::PageTable::doesnt_overlap(*page, kernel_start, kernel_end_addr)
+                && Proc::PageTable::doesnt_overlap(
+                    *page,
+                    boot_info.start_address(),
+                    boot_info.end_address(),
+                )
+        })
+}
+
+unsafe fn boot_os<'a, Proc: Architecture<'a> + 'a>(
+    multiboot_info_ptr: u32,
+) -> Result<(), Error<Proc::Error>> {
+
+    let mut frame_allocator = FrameAllocator::<'a, Proc::PageTable> { next: None };
+
+    // Initialize available memory and set up page tables
+    let boot_info = BootInformation::load(multiboot_info_ptr as *const BootInformationHeader)
+        .map_err(Error::MultibootHeaderLoad)?;
+
+    let proc = Proc::init().map_err(Error::ArchitectureSpecific)?;
+
+    boot_info.memory_map_tag().ok_or(Error::NoMemoryMap)?;
+    let memory_map_tag = boot_info.memory_map_tag().ok_or(Error::NoMemoryMap)?;
+    let mut physical_memory_size = 0;
+
+    // Add free frames from first 4 GB to available frame list
+    for memory_area in available_memory_areas(memory_map_tag) {
+        physical_memory_size = max(physical_memory_size, memory_area.end_address() as usize);
+        for page in unused_page_frames_from_initial_virtual_address_space::<Proc>(
+            memory_area,
+            &header_start as *const u8 as usize,
+            &kernel_end as *const u8 as usize,
+            &boot_info,
+        ) {
+            frame_allocator.add_frame(page);
+        }
+    }
+
+    // Set up memory past 4 GB
+    // TODO: replace Amd64 with Proc once https://github.com/rust-lang/rust/issues/76560 is closed
+    let mut page_table_indices = [1; <Amd64 as Architecture>::KERNEL_PAGE_TABLE_DEPTH - 1];
+    page_table_indices[Proc::KERNEL_PAGE_TABLE_DEPTH - 2] = Proc::INITIAL_NUM_PAGE_TABLES;
+    let new_memory_state = (*proc.get_root_page_table()).identity_map_with_offset(
+        &mut frame_allocator,
+        memory_map_tag,
+        MemoryState {
+            virtual_memory_size: Proc::INITIAL_VIRTUAL_MEMORY_SIZE,
+            last_frame_added_to_allocator: Proc::INITIAL_VIRTUAL_MEMORY_SIZE,
+        },
+        physical_memory_size,
+        &page_table_indices,
+    );
+    frame_allocator.add_frames(memory_map_tag, new_memory_state);
+
+    // Reclaim memory used by boot info struct
+    for frame in Proc::PageTable::pages(boot_info.start_address(), boot_info.end_address()) {
+        frame_allocator.add_frame(frame);
+    }
+
+    Ok(())
+}
+
+fn available_pages_not_in_allocator<'a, PageTableT: PageTable<'a>>(
+    memory_map: &MemoryMapTag,
+    memory_state: MemoryState,
+) -> impl Iterator<Item = usize> + '_ {
+    available_memory_areas(memory_map).flat_map(move |memory_area| {
+        let end_address = memory_area.end_address() as usize;
+        (max(
+            PageTableT::first_full_page_address(memory_area.start_address()),
+            memory_state.last_frame_added_to_allocator,
+        )
+            ..min(
+                if end_address % PageTableT::PAGE_SIZE == 0 {
+                    end_address
+                } else {
+                    end_address + PageTableT::PAGE_SIZE
+                },
+                memory_state.virtual_memory_size,
+            ))
+            .step_by(PageTableT::PAGE_SIZE)
+    })
+}
+
+fn available_memory_areas(memory_map: &MemoryMapTag) -> impl Iterator<Item = &MemoryArea> {
+    memory_map.memory_areas().iter().filter(|area| {
+        area.typ() == MemoryAreaType::Available || area.typ() == MemoryAreaType::AcpiAvailable
+    })
+}

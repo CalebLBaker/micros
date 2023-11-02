@@ -4,6 +4,7 @@ members = [
     "kernel",
     "display-daemon"
 ]
+resolver = "2"
 
 [profile.dev]
 panic = "abort"
