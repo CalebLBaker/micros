@@ -1,4 +1,8 @@
 /target
 /build
 Cargo.lock
+bazel-out
+bazel-testlogs
+bazel-micros
+bazel-bin
 
