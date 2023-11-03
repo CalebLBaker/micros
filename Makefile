@@ -24,6 +24,10 @@ clean:
 run: $(iso)
 	@qemu-system-x86_64 -cdrom $(iso) -d int -no-shutdown -no-reboot
 
+check: $(image)
+	@cargo clippy
+	@cargo audit
+
 $(kernel): $(kernel_source_files) $(display_source_files) Cargo.toml kernel/Cargo.toml display-daemon/Cargo.toml
 	@cargo build --target kernel/arch/$(arch)/$(target).json --release
 
