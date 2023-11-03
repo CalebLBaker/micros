@@ -349,7 +349,6 @@ fn unused_page_frames_from_initial_virtual_address_space<'a, 'b, Proc: Architect
 unsafe fn boot_os<'a, Proc: Architecture<'a> + 'a>(
     multiboot_info_ptr: u32,
 ) -> Result<(), Error<Proc::Error>> {
-
     let mut frame_allocator = FrameAllocator::<'a, Proc::PageTable> { next: None };
 
     // Initialize available memory and set up page tables

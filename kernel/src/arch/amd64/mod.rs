@@ -107,7 +107,7 @@ struct SegmentSelectors {
     tss_selector: SegmentSelector,
 }
 
-extern "x86-interrupt" fn breakpoint_handler(_stack_frame: InterruptStackFrame) { }
+extern "x86-interrupt" fn breakpoint_handler(_stack_frame: InterruptStackFrame) {}
 
 extern "x86-interrupt" fn double_fault_handler(stack_frame: InterruptStackFrame, _: u64) -> ! {
     panic!("Double Fault\n{:#?}", stack_frame);
