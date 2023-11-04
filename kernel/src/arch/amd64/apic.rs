@@ -1,4 +1,3 @@
-use core::ops::DerefMut;
 use spin::Mutex;
 use x2apic::lapic::{xapic_base, LocalApic, LocalApicBuilder};
 use x86_64::structures::idt::InterruptStackFrame;
@@ -50,7 +49,7 @@ fn create_apic_builder() -> LocalApicBuilder {
 }
 
 fn set_local_apic(apic: LocalApic) {
-    *LOCAL_APIC.lock().deref_mut() = Some(apic);
+    *LOCAL_APIC.lock() = Some(apic);
 }
 
 unsafe fn end_interrupt() {

@@ -30,7 +30,7 @@ pub enum Color {
 pub struct ColorCode(u8);
 
 impl ColorCode {
-    pub fn new(foreground: Color, background: Color) -> ColorCode {
+    fn new(foreground: Color, background: Color) -> ColorCode {
         ColorCode((background as u8) << 4 | (foreground as u8))
     }
 }
@@ -53,37 +53,30 @@ pub struct Writer {
 
 impl Writer {
     pub fn write_byte(&mut self, byte: u8) {
-        match byte {
-            b'\n' => self.position += BUFFER_WIDTH - self.position % BUFFER_WIDTH,
-            _ => {
-                unsafe {
-                    write_volatile(
-                        self.buffer.add(self.position),
-                        ScreenChar {
-                            ascii_character: byte,
-                            color_code: self.color_code,
-                        },
-                    );
-                }
-                self.position += 1;
-                if self.position >= BUFFER_HEIGHT * BUFFER_WIDTH {
-                    self.position = 0;
-                }
+        if byte == b'\n' {
+            self.position += BUFFER_WIDTH - self.position % BUFFER_WIDTH;
+        } else {
+            unsafe {
+                write_volatile(
+                    self.buffer.add(self.position),
+                    ScreenChar {
+                        ascii_character: byte,
+                        color_code: self.color_code,
+                    },
+                );
+            }
+            self.position += 1;
+            if self.position >= BUFFER_HEIGHT * BUFFER_WIDTH {
+                self.position = 0;
             }
         }
     }
-    pub fn new(pos: usize, color: ColorCode) -> Writer {
+    fn new(pos: usize, color: ColorCode) -> Writer {
         Writer {
             position: pos,
             color_code: color,
             buffer: 0xb8000 as *mut ScreenChar,
         }
-    }
-    pub fn write_str(&mut self, s: &str) -> fmt::Result {
-        for byte in s.bytes() {
-            self.write_byte(byte);
-        }
-        Ok(())
     }
 }
 
@@ -97,7 +90,10 @@ unsafe impl Send for Writer {}
 
 impl fmt::Write for Writer {
     fn write_str(&mut self, s: &str) -> fmt::Result {
-        self.write_str(s)
+        for byte in s.bytes() {
+            self.write_byte(byte);
+        }
+        Ok(())
     }
 }
 

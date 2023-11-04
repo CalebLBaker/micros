@@ -25,7 +25,7 @@ run: $(iso)
 	@qemu-system-x86_64 -cdrom $(iso) -d int -no-shutdown -no-reboot
 
 check: $(image)
-	@cargo clippy
+	@cargo clippy -- -Dwarnings -Dclippy::pedantic
 	@cargo audit
 
 $(kernel): $(kernel_source_files) $(display_source_files) Cargo.toml kernel/Cargo.toml display-daemon/Cargo.toml

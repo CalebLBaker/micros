@@ -8,6 +8,7 @@ use core::{
     iter::StepBy,
     ops::Range,
     panic::PanicInfo,
+    ptr::addr_of,
 };
 use display_daemon::WRITER;
 
@@ -46,7 +47,7 @@ pub extern "C" fn main(multiboot_info_ptr: u32) -> ! {
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
-    let _ = write!(WRITER.lock(), "{}", info);
+    let _ = write!(WRITER.lock(), "{info}");
     Amd64::halt()
 }
 
@@ -176,9 +177,8 @@ trait PageTable<'a>: Sized + 'a {
                 );
                 if identity_map_result.finished {
                     return identity_map_result.memory_state;
-                } else {
-                    new_memory_state = identity_map_result.memory_state
                 }
+                new_memory_state = identity_map_result.memory_state;
             }
             new_memory_state
         }
@@ -230,9 +230,8 @@ trait PageTable<'a>: Sized + 'a {
                 );
                 if identity_map_result.finished {
                     return identity_map_result.memory_state;
-                } else {
-                    new_memory_state = identity_map_result.memory_state
                 }
+                new_memory_state = identity_map_result.memory_state;
             }
             new_memory_state
         }
@@ -242,13 +241,12 @@ trait PageTable<'a>: Sized + 'a {
         frame_start > region_end || frame_start + Self::PAGE_SIZE < region_start
     }
 
-    fn first_full_page_address(start_address: u64) -> usize {
-        let start = start_address as usize;
-        let page_offset = start % Self::PAGE_SIZE;
+    fn first_full_page_address(start_address: usize) -> usize {
+        let page_offset = start_address % Self::PAGE_SIZE;
         if page_offset == 0 {
-            start
+            start_address
         } else {
-            start + Self::PAGE_SIZE - page_offset
+            start_address + Self::PAGE_SIZE - page_offset
         }
     }
 }
@@ -297,17 +295,16 @@ impl<'a, PageTableT: PageTable<'a>> FrameAllocator<'a, PageTableT> {
         memory_map: &MemoryMapTag,
         memory_state: MemoryState,
     ) -> GetFrameResponse {
-        match self.get_frame() {
-            Some(frame) => GetFrameResponse {
+        if let Some(frame) = self.get_frame() {
+            GetFrameResponse {
                 frame: Some(frame),
                 last_frame_added_to_allocator: memory_state.last_frame_added_to_allocator,
-            },
-            None => {
-                self.add_frames(memory_map, memory_state);
-                GetFrameResponse {
-                    frame: self.get_frame(),
-                    last_frame_added_to_allocator: memory_state.virtual_memory_size,
-                }
+            }
+        } else {
+            self.add_frames(memory_map, memory_state);
+            GetFrameResponse {
+                frame: self.get_frame(),
+                last_frame_added_to_allocator: memory_state.virtual_memory_size,
             }
         }
     }
@@ -324,15 +321,27 @@ struct GetFrameResponse {
     last_frame_added_to_allocator: usize,
 }
 
+// I'm only supporting 64 bit machines as of now so casting from u64 to usize shouldn't result
+// in any truncation. Will need to revisit if I ever add support for 32 bit machines.
+#[allow(clippy::cast_possible_truncation)]
+fn memory_area_start(area: &MemoryArea) -> usize {
+    area.start_address() as usize
+}
+
+#[allow(clippy::cast_possible_truncation)]
+fn memory_area_end(area: &MemoryArea) -> usize {
+    area.end_address() as usize
+}
+
 fn unused_page_frames_from_initial_virtual_address_space<'a, 'b, Proc: Architecture<'a> + 'b>(
     memory_area: &'b MemoryArea,
     kernel_start: usize,
     kernel_end_addr: usize,
     boot_info: &'b BootInformation,
 ) -> impl Iterator<Item = usize> + 'b {
-    (Proc::PageTable::first_full_page_address(memory_area.start_address())
+    (Proc::PageTable::first_full_page_address(memory_area_start(memory_area))
         ..min(
-            memory_area.end_address() as usize,
+            memory_area_end(memory_area),
             Proc::INITIAL_VIRTUAL_MEMORY_SIZE,
         ))
         .step_by(Proc::PageTable::PAGE_SIZE)
@@ -363,11 +372,11 @@ unsafe fn boot_os<'a, Proc: Architecture<'a> + 'a>(
 
     // Add free frames from first 4 GB to available frame list
     for memory_area in available_memory_areas(memory_map_tag) {
-        physical_memory_size = max(physical_memory_size, memory_area.end_address() as usize);
+        physical_memory_size = max(physical_memory_size, memory_area_end(memory_area));
         for page in unused_page_frames_from_initial_virtual_address_space::<Proc>(
             memory_area,
-            &header_start as *const u8 as usize,
-            &kernel_end as *const u8 as usize,
+            addr_of!(header_start) as usize,
+            addr_of!(kernel_end) as usize,
             &boot_info,
         ) {
             frame_allocator.add_frame(page);
@@ -403,9 +412,9 @@ fn available_pages_not_in_allocator<'a, PageTableT: PageTable<'a>>(
     memory_state: MemoryState,
 ) -> impl Iterator<Item = usize> + '_ {
     available_memory_areas(memory_map).flat_map(move |memory_area| {
-        let end_address = memory_area.end_address() as usize;
+        let end_address = memory_area_end(memory_area);
         (max(
-            PageTableT::first_full_page_address(memory_area.start_address()),
+            PageTableT::first_full_page_address(memory_area_start(memory_area)),
             memory_state.last_frame_added_to_allocator,
         )
             ..min(

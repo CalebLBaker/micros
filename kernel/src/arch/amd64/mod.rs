@@ -4,6 +4,7 @@ use crate::Architecture;
 use apic::{
     error_interrupt_handler, spurious_interrupt_handler, timer_interrupt_handler, InterruptIndex,
 };
+use core::ptr::addr_of_mut;
 use x86_64::{
     addr::PhysAddr,
     instructions::{hlt, interrupts, tables::load_tss},
@@ -32,7 +33,7 @@ impl<'a> Architecture<'a> for Amd64 {
     unsafe fn init() -> Result<Self, Self::Error> {
         static mut DOUBLE_FAULT_STACK: [u8; DOUBLE_FAULT_STACK_SIZE] = [0; DOUBLE_FAULT_STACK_SIZE];
         let segment_selectors =
-            load_gdt(&mut GDT, &mut TSS, VirtAddr::from_ptr(&DOUBLE_FAULT_STACK))?;
+            load_gdt(&mut GDT, &mut TSS, VirtAddr::from_ptr(&DOUBLE_FAULT_STACK));
         CS::set_reg(segment_selectors.code_selector);
         load_tss(segment_selectors.tss_selector);
         IDT.breakpoint.set_handler_fn(breakpoint_handler);
@@ -47,7 +48,7 @@ impl<'a> Architecture<'a> for Amd64 {
     }
 
     unsafe fn get_root_page_table(self) -> *mut PageTable {
-        &mut p4_table as *mut PageTable
+        addr_of_mut!(p4_table)
     }
 
     fn halt() -> ! {
@@ -124,16 +125,16 @@ fn load_gdt(
     gdt: &'static mut GlobalDescriptorTable,
     tss: &'static mut TaskStateSegment,
     double_fault_stack: VirtAddr,
-) -> Result<SegmentSelectors, &'static str> {
+) -> SegmentSelectors {
     tss.interrupt_stack_table[DOUBLE_FAULT_IST_INDEX as usize] =
         double_fault_stack + DOUBLE_FAULT_STACK_SIZE;
     let code_selector = gdt.add_entry(Descriptor::kernel_code_segment());
     let tss_selector = gdt.add_entry(Descriptor::tss_segment(tss));
     gdt.load();
-    Ok(SegmentSelectors {
+    SegmentSelectors {
         code_selector,
         tss_selector,
-    })
+    }
 }
 
 fn set_interrupt_handlers(idt: &mut InterruptDescriptorTable) {
