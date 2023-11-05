@@ -12,11 +12,13 @@ SPACE         equ 0x4f204f20
 ; Miscelaneous constants
 MULTIBOOT_CHECK       equ 0x36d76289
 CPUID_BIT             equ 1 << 21
+GIGABYTE_PAGES_CPUID_BIT equ 1 << 26
 LONG_MODE_CPUID_BIT   equ 1 << 29
 PAGE_SIZE             equ 4 * 1024
 PAGE_TABLE_ENTRY_SIZE equ 8
 STACK_SIZE            equ 256 * PAGE_SIZE
 HUGE_PAGE_SIZE        equ 2 * 1024 * 1024
+GIGABYTE              equ 1024 * 1024 * 1024
 NUM_P2_TABLES         equ 4
 PRESENT_WRITABLE      equ 3
 PRESENT_WRITABLE_HUGE equ (0x80 + PRESENT_WRITABLE)
@@ -54,6 +56,7 @@ header_start:
 header_end:
 
 global p4_table
+global p2_tables
 section .bss
 ; Page tables
 align PAGE_SIZE
@@ -117,11 +120,55 @@ _start:
     test edx, LONG_MODE_CPUID_BIT
     jz .no_long_mode
 
+    ; Save cpuid result into esi so it can be passed into main
+    mov esi, edx
+
     ; Set up p4 table with 1 entry
     mov eax, p3_table
     or eax, PRESENT_WRITABLE
     mov [p4_table], eax
 
+	; Test for GB page support
+	test esi, GIGABYTE_PAGES_CPUID_BIT
+	jz .map_p3_table_no_gigabyte_pages
+
+    ; Set up p3 table with 4 entries
+    mov eax, PRESENT_WRITABLE_HUGE
+    mov [p3_table], eax
+    add eax, GIGABYTE
+    mov [p3_table + PAGE_TABLE_ENTRY_SIZE], eax
+    add eax, GIGABYTE
+    mov [p3_table + 2 * PAGE_TABLE_ENTRY_SIZE], eax
+    add eax, GIGABYTE
+    mov [p3_table + 3 * PAGE_TABLE_ENTRY_SIZE], eax
+
+.done_mapping_page_tables:
+    ; load p4 to cr3
+    mov eax, p4_table
+    mov cr3, eax
+
+    ; enable physical address extension
+    mov eax, cr4
+    or eax, PAE_FLAG
+    mov cr4, eax
+    ; set long mode bit
+    mov ecx, EFER_MSR
+
+    rdmsr
+    or eax, LONG_MODE_EFER
+    wrmsr
+
+    ; enable paging
+    mov eax, cr0
+    or eax, PAGING_FLAG
+    mov cr0, eax
+
+    ; load 64-bit gdt
+    lgdt [gdt64.pointer]
+
+    jmp gdt64.code:long_mode_start
+
+.map_p3_table_no_gigabyte_pages:
     ; Set up p3 table with 4 entries
     mov eax, p2_tables
     or eax, PRESENT_WRITABLE
@@ -137,38 +184,16 @@ _start:
     mov ecx, p2_tables ; ecx is the address of the table entry to edit
     mov edx, NUM_P2_TABLES * PAGE_SIZE
     add edx, ecx ; edx is the address of the end of the last table to edit
-    xor ebx, ebx ; ebx is the address of the page frame to map to
+    mov ebx, PRESENT_WRITABLE_HUGE ; ebx is the page table entry value
 
 .map_p2_table:
-    mov eax, ebx
+    mov [ecx], ebx
     add ebx, HUGE_PAGE_SIZE
-    or eax, PRESENT_WRITABLE_HUGE
-    mov [ecx], eax
     add ecx, PAGE_TABLE_ENTRY_SIZE
     cmp ecx, edx
     jne .map_p2_table
 
-    ; load p4 to cr3
-    mov eax, p4_table
-    mov cr3, eax
-    ; enable physical address extension
-    mov eax, cr4
-    or eax, PAE_FLAG
-    mov cr4, eax
-    ; set long mode bit
-    mov ecx, EFER_MSR
-    rdmsr
-    or eax, LONG_MODE_EFER
-    wrmsr
-    ; enable paging
-    mov eax, cr0
-    or eax, PAGING_FLAG
-    mov cr0, eax
-
-    ; load 64-bit gdt
-    lgdt [gdt64.pointer]
-
-    jmp gdt64.code:long_mode_start
+    jmp .done_mapping_page_tables
 
 .no_multiboot:
     mov al, NO_MULTIBOOT
