@@ -33,10 +33,15 @@ $(kernel): $(kernel_source_files) $(display_source_files) Cargo.toml kernel/Carg
 
 iso: $(iso)
 
-$(iso): $(image) $(grub_cfg)
+build/third-party-licenses.html: about.toml about.hbs
+	@cargo about generate about.hbs -o build/third-party-licenses.html
+
+$(iso): $(image) $(grub_cfg) LICENSE build/third-party-licenses.html
 	@mkdir -p build/isofiles/boot/grub
 	@cp $(image) build/isofiles/boot/micros.bin
 	@cp $(grub_cfg) build/isofiles/boot/grub
+	@cp LICENSE build/isofiles/
+	@cp build/third-party-licenses.html build/isofiles/
 	@grub-mkrescue -o $(iso) build/isofiles 2> /dev/null
 	@rm -r build/isofiles
 

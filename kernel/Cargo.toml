@@ -2,7 +2,7 @@
 name = "kernel"
 version = "0.1.0"
 authors = ["CalebLBaker <calebbaker774@gmail.com>"]
-license = "MIT"
+license = "BSL-1.0"
 edition = "2021"
 
 [lib]
