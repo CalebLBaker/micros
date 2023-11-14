@@ -6,6 +6,10 @@ members = [
 ]
 resolver = "2"
 
+[workspace.package]
+authors = ["Caleb Baker <calebbaker774@gmail.com"]
+license-file = "LICENSE"
+
 [profile.dev]
 panic = "abort"
 
