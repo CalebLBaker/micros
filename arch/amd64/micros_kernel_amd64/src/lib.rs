@@ -1,16 +1,24 @@
+#![no_std]
+#![feature(impl_trait_in_assoc_type)]
+#![feature(abi_x86_interrupt)]
+
 mod apic;
 
-use crate::{
+use micros_kernel_common::{
     boot_os, end_of_last_full_page, first_full_page_address, Architecture, Error, FrameAllocator,
-    GetFrameResponse, MemoryMapTag, MemoryState,
+    GetFrameResponse, MemoryState, PageTable, PageTableEntry
 };
+use multiboot2::{MbiLoadError, MemoryMapTag};
 use apic::{
     error_interrupt_handler, spurious_interrupt_handler, timer_interrupt_handler, InterruptIndex,
 };
 use core::{
+    fmt::Write,
     ops::Range,
+    panic::PanicInfo,
     ptr::{addr_of, addr_of_mut},
 };
+use micros_console_writer::WRITER;
 use x86_64::{
     addr::PhysAddr,
     instructions::{hlt, interrupts, tables::load_tss},
@@ -18,62 +26,51 @@ use x86_64::{
     structures::{
         gdt::{Descriptor, GlobalDescriptorTable},
         idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode},
-        paging::page_table::{PageTable, PageTableEntry, PageTableFlags},
+        paging::page_table,
         tss::TaskStateSegment,
     },
     VirtAddr,
 };
+use page_table::PageTableFlags;
 
-pub enum OsError {
-    Apic(&'static str),
-    Generic(Error),
-}
-
-pub unsafe fn run_operating_system(multiboot_info_ptr: u32, cpu_info: u32) -> Result<(), OsError> {
-    static mut DOUBLE_FAULT_STACK: [u8; DOUBLE_FAULT_STACK_SIZE] = [0; DOUBLE_FAULT_STACK_SIZE];
-    let segment_selectors = load_gdt(&mut GDT, &mut TSS, VirtAddr::from_ptr(&DOUBLE_FAULT_STACK));
-    CS::set_reg(segment_selectors.code_selector);
-    load_tss(segment_selectors.tss_selector);
-    IDT.breakpoint.set_handler_fn(breakpoint_handler);
-    let double_fault_interrupt = IDT.double_fault.set_handler_fn(double_fault_handler);
-    double_fault_interrupt.set_stack_index(DOUBLE_FAULT_IST_INDEX);
-    IDT.page_fault.set_handler_fn(page_fault_handler);
-    set_interrupt_handlers(&mut IDT);
-    IDT.load();
-    apic::init().map_err(OsError::Apic)?;
-    interrupts::enable();
-
-    boot_os(
-        &mut if supports_gigabyte_pages(cpu_info) {
-            let mut four_kilobyte_pages = FrameAllocator { next: None };
-            four_kilobyte_pages.add_frame(addr_of!(p2_tables[0]) as usize);
-            four_kilobyte_pages.add_frame(addr_of!(p2_tables[1]) as usize);
-            Amd64 {
-                four_kilobyte_pages,
-                two_megabyte_pages: FrameAllocator { next: None },
-                gigabyte_pages: Some(FrameAllocator { next: None }),
-            }
-        } else {
-            Amd64 {
-                four_kilobyte_pages: FrameAllocator { next: None },
-                two_megabyte_pages: FrameAllocator { next: None },
-                gigabyte_pages: None,
-            }
-        },
-        multiboot_info_ptr,
-    )
-    .map_err(OsError::Generic)
-}
-
-pub fn halt() -> ! {
-    loop {
-        hlt();
+#[no_mangle]
+pub extern "C" fn main(multiboot_info_ptr: u32, cpu_info: u32) -> ! {
+    match unsafe { run_operating_system(multiboot_info_ptr, cpu_info) } {
+        Ok(()) => {
+            let _ = WRITER
+                .lock()
+                .write_str("Everything seems to be working . . . \n");
+        }
+        Err(err) => {
+            let _ = WRITER.lock().write_str(match err {
+                OsError::Generic(Error::MultibootHeaderLoad(
+                    MbiLoadError::IllegalAddress,
+                )) => "Illegal multiboot info address",
+                OsError::Generic(Error::MultibootHeaderLoad(
+                    MbiLoadError::IllegalTotalSize(_),
+                )) => "Illegal multiboot info size",
+                OsError::Generic(Error::MultibootHeaderLoad(MbiLoadError::NoEndTag)) => {
+                    "No multiboot info end tag"
+                }
+                OsError::Apic(err) => err,
+                OsError::Generic(Error::NoMemoryMap) => {
+                    "No memory map tag in multiboot information"
+                }
+            });
+        }
     }
+    halt()
+}
+
+#[panic_handler]
+fn panic(info: &PanicInfo) -> ! {
+    let _ = write!(WRITER.lock(), "{info}");
+    halt()
 }
 
 extern "C" {
-    static mut p4_table: PageTable;
-    static mut p2_tables: [PageTable; 2];
+    static mut p4_table: Amd64PageTable;
+    static mut p2_tables: [Amd64PageTable; 2];
 }
 
 extern "x86-interrupt" fn breakpoint_handler(_stack_frame: InterruptStackFrame) {}
@@ -104,6 +101,11 @@ static mut IDT: InterruptDescriptorTable = InterruptDescriptorTable::new();
 static mut TSS: TaskStateSegment = TaskStateSegment::new();
 
 static mut GDT: GlobalDescriptorTable = GlobalDescriptorTable::new();
+
+enum OsError {
+    Apic(&'static str),
+    Generic(Error),
+}
 
 struct Amd64 {
     four_kilobyte_pages: FrameAllocator<FOUR_KILOBYTES>,
@@ -140,9 +142,9 @@ impl Amd64 {
 impl<'a> Architecture<'a> for Amd64 {
     const INITIAL_VIRTUAL_MEMORY_SIZE: usize = 0x1_0000_0000;
 
-    type PageTable = PageTable;
+    type PageTable = Amd64PageTable;
 
-    unsafe fn get_root_page_table() -> *mut PageTable {
+    unsafe fn get_root_page_table() -> *mut Self::PageTable {
         addr_of_mut!(p4_table)
     }
 
@@ -209,29 +211,35 @@ impl<'a> Architecture<'a> for Amd64 {
     }
 }
 
-impl super::super::PageTableEntry for PageTableEntry {
+struct Amd64PageTableEntry<'a>(&'a mut page_table::PageTableEntry);
+
+impl<'a> PageTableEntry for Amd64PageTableEntry<'a> {
     type Flags = PageTableFlags;
 
-    fn set(&mut self, address: usize, flags: PageTableFlags) {
-        self.set_addr(PhysAddr::new_truncate(address as u64), flags);
+    fn set(self, address: usize, flags: PageTableFlags) {
+        self.0.set_addr(PhysAddr::new_truncate(address as u64), flags);
     }
 
-    fn mark_unused(&mut self) {
-        self.set_unused();
+    fn mark_unused(self) {
+        self.0.set_unused();
     }
 }
 
-impl<'a> super::super::PageTable<'a> for PageTable {
+#[repr(transparent)]
+struct Amd64PageTable(page_table::PageTable);
+
+impl<'a> PageTable<'a> for Amd64PageTable {
     const PAGE_SIZE: usize = FOUR_KILOBYTES;
 
-    type Entry = PageTableEntry;
-    type EntryIterator = impl Iterator<Item = &'a mut PageTableEntry>;
+    type Entry = Amd64PageTableEntry<'a>;
+    type EntryIterator = impl Iterator<Item = Self::Entry>;
 
-    fn iter_mut(&'a mut self) -> Self::EntryIterator {
-        self.iter_mut()
+    fn iter(&'a mut self) -> Self::EntryIterator {
+        self.0.iter_mut().map(Amd64PageTableEntry)
     }
+
     fn get_page_table(&mut self, index: usize) -> *mut Self {
-        self[index].addr().as_u64() as *mut PageTable
+        self.0[index].addr().as_u64() as *mut Self
     }
 
     fn kernel_page_table_flags() -> PageTableFlags {
@@ -246,6 +254,48 @@ impl<'a> super::super::PageTable<'a> for PageTable {
 struct SegmentSelectors {
     code_selector: SegmentSelector,
     tss_selector: SegmentSelector,
+}
+
+unsafe fn run_operating_system(multiboot_info_ptr: u32, cpu_info: u32) -> Result<(), OsError> {
+    static mut DOUBLE_FAULT_STACK: [u8; DOUBLE_FAULT_STACK_SIZE] = [0; DOUBLE_FAULT_STACK_SIZE];
+    let segment_selectors = load_gdt(&mut GDT, &mut TSS, VirtAddr::from_ptr(&DOUBLE_FAULT_STACK));
+    CS::set_reg(segment_selectors.code_selector);
+    load_tss(segment_selectors.tss_selector);
+    IDT.breakpoint.set_handler_fn(breakpoint_handler);
+    let double_fault_interrupt = IDT.double_fault.set_handler_fn(double_fault_handler);
+    double_fault_interrupt.set_stack_index(DOUBLE_FAULT_IST_INDEX);
+    IDT.page_fault.set_handler_fn(page_fault_handler);
+    set_interrupt_handlers(&mut IDT);
+    IDT.load();
+    apic::init().map_err(OsError::Apic)?;
+    interrupts::enable();
+
+    boot_os(
+        &mut if supports_gigabyte_pages(cpu_info) {
+            let mut four_kilobyte_pages = FrameAllocator::default();
+            four_kilobyte_pages.add_frame(addr_of!(p2_tables[0]) as usize);
+            four_kilobyte_pages.add_frame(addr_of!(p2_tables[1]) as usize);
+            Amd64 {
+                four_kilobyte_pages,
+                two_megabyte_pages: FrameAllocator::default(),
+                gigabyte_pages: Some(FrameAllocator::default()),
+            }
+        } else {
+            Amd64 {
+                four_kilobyte_pages: FrameAllocator::default(),
+                two_megabyte_pages: FrameAllocator::default(),
+                gigabyte_pages: None,
+            }
+        },
+        multiboot_info_ptr,
+    )
+    .map_err(OsError::Generic)
+}
+
+fn halt() -> ! {
+    loop {
+        hlt();
+    }
 }
 
 fn supports_gigabyte_pages(cpu_info: u32) -> bool {

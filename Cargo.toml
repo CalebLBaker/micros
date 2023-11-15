@@ -1,8 +1,9 @@
 [workspace]
 
 members = [
-    "kernel",
-    "display-daemon"
+	"arch/amd64/micros_kernel_amd64",
+	"arch/amd64/micros_console_writer",
+	"micros_kernel_common",
 ]
 resolver = "2"
 

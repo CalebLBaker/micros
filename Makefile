@@ -6,13 +6,11 @@ iso := build/micros-$(arch).iso
 
 linker_script := image/linker.ld
 grub_cfg := image/grub.cfg
-assembly_source_files := $(wildcard bootstrap/src/arch/$(arch)/*.asm)
-assembly_object_files := $(patsubst bootstrap/src/arch/$(arch)/%.asm, build/bootstrap/arch/$(arch)/%.o, $(assembly_source_files))
-kernel_source_files := $(wildcard kernel/src/*.rs) $(wildcard kernel/src/arch/*.rs) $(wildcard kernel/src/arch/amd64/*.rs)
-display_source_files := $(wildcard display-driver/src/arch/$(arch)/*.rs)
-kernel := target/$(target)/$(config)/libkernel.a
+assembly_source_files := $(wildcard arch/$(arch)/*.asm)
+assembly_object_files := $(patsubst arch/$(arch)/%.asm, build/arch/$(arch)/%.o, $(assembly_source_files))
+kernel := target/$(target)/$(config)/libmicros_kernel_amd64.a
 
-.PHONY: all clean run iso
+.PHONY: all clean run iso build_kernel
 
 all: $(image)
 
@@ -25,11 +23,11 @@ run: $(iso)
 	@qemu-system-x86_64 -cdrom $(iso) -d int -no-shutdown -no-reboot
 
 check: $(image)
-	@cargo clippy -- -Dwarnings -Dclippy::pedantic -Aclippy::struct_field_names
+	@cargo clippy -- -Dwarnings -Dclippy::pedantic -Aclippy::struct_field_names -Aclippy::missing_safety_doc -Aclippy::missing_errors_doc
 	@cargo audit
 
-$(kernel): $(kernel_source_files) $(display_source_files) Cargo.toml kernel/Cargo.toml display-daemon/Cargo.toml
-	@cargo build --target kernel/arch/$(arch)/$(target).json --release
+build_kernel:
+	@cargo build --target arch/$(arch)/$(target).json --release
 
 iso: $(iso)
 
@@ -45,10 +43,10 @@ $(iso): $(image) $(grub_cfg) LICENSE build/third-party-licenses.html
 	@grub-mkrescue -o $(iso) build/isofiles 2> /dev/null
 	@rm -r build/isofiles
 
-$(image): $(assembly_object_files) $(linker_script) $(kernel)
+$(image): $(assembly_object_files) $(linker_script) build_kernel
 	@ld -n -T $(linker_script) -o $(image) $(assembly_object_files) $(kernel)
 
-build/bootstrap/arch/$(arch)/%.o: bootstrap/src/arch/$(arch)/%.asm
+build/arch/$(arch)/%.o: arch/$(arch)/%.asm
 	@mkdir -p $(shell dirname $@)
 	@nasm -felf64 $< -o $@
 

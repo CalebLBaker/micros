@@ -1,66 +1,16 @@
 #![no_std]
-#![feature(impl_trait_in_assoc_type)]
-#![feature(abi_x86_interrupt)]
 
 use core::{
     cmp::{max, min},
-    fmt::Write,
     ops::Range,
-    panic::PanicInfo,
     ptr::addr_of,
 };
-use display_daemon::WRITER;
 
 use multiboot2::{
     BootInformation, BootInformationHeader, MbiLoadError, MemoryArea, MemoryAreaType, MemoryMapTag,
 };
 
-mod arch;
-
-use arch::amd64;
-
-#[no_mangle]
-pub extern "C" fn main(multiboot_info_ptr: u32, cpu_info: u32) -> ! {
-    match unsafe { amd64::run_operating_system(multiboot_info_ptr, cpu_info) } {
-        Ok(()) => {
-            let _ = WRITER
-                .lock()
-                .write_str("Everything seems to be working . . . \n");
-        }
-        Err(err) => {
-            let _ = WRITER.lock().write_str(match err {
-                amd64::OsError::Generic(Error::MultibootHeaderLoad(
-                    MbiLoadError::IllegalAddress,
-                )) => "Illegal multiboot info address",
-                amd64::OsError::Generic(Error::MultibootHeaderLoad(
-                    MbiLoadError::IllegalTotalSize(_),
-                )) => "Illegal multiboot info size",
-                amd64::OsError::Generic(Error::MultibootHeaderLoad(MbiLoadError::NoEndTag)) => {
-                    "No multiboot info end tag"
-                }
-                amd64::OsError::Apic(err) => err,
-                amd64::OsError::Generic(Error::NoMemoryMap) => {
-                    "No memory map tag in multiboot information"
-                }
-            });
-        }
-    }
-    amd64::halt()
-}
-
-#[panic_handler]
-fn panic(info: &PanicInfo) -> ! {
-    let _ = write!(WRITER.lock(), "{info}");
-    amd64::halt()
-}
-
-extern "C" {
-    // These aren't real variables. We just need the address of the start and end of the kernel
-    static header_start: u8;
-    static kernel_end: u8;
-}
-
-trait Architecture<'a>: Sized {
+pub trait Architecture<'a>: Sized {
     const INITIAL_VIRTUAL_MEMORY_SIZE: usize;
 
     type PageTable: PageTable<'a>;
@@ -94,7 +44,7 @@ trait Architecture<'a>: Sized {
 
     unsafe fn identity_map_entry(
         &mut self,
-        entry: &'a mut <Self::PageTable as PageTable<'a>>::Entry,
+        entry: <Self::PageTable as PageTable<'a>>::Entry,
         memory_map: &MemoryMapTag,
         memory_state: MemoryState,
         remaining_page_table_levels: usize,
@@ -153,7 +103,7 @@ trait Architecture<'a>: Sized {
             let mut new_memory_state = memory_state;
             let mut finished = false;
             // Populate unpopulated entries
-            for entry in page_table.iter_mut() {
+            for entry in page_table.iter() {
                 if finished {
                     entry.mark_unused();
                 } else {
@@ -210,7 +160,7 @@ trait Architecture<'a>: Sized {
 
             // Populate unpopulated entries
             let mut finished = false;
-            for entry in page_table.iter_mut().skip(offset) {
+            for entry in page_table.iter().skip(offset) {
                 if finished {
                     entry.mark_unused();
                 } else {
@@ -230,14 +180,12 @@ trait Architecture<'a>: Sized {
     }
 }
 
-trait PageTable<'a>: Sized + 'a {
+pub trait PageTable<'a>: Sized + 'a {
     const PAGE_SIZE: usize;
 
     type Entry: PageTableEntry;
 
-    type EntryIterator: Iterator<Item = &'a mut Self::Entry>
-    where
-        <Self as PageTable<'a>>::Entry: 'a;
+    type EntryIterator: Iterator<Item = Self::Entry>;
 
     fn kernel_page_table_flags() -> <Self::Entry as PageTableEntry>::Flags;
 
@@ -245,8 +193,9 @@ trait PageTable<'a>: Sized + 'a {
 
     fn get_page_table(&mut self, index: usize) -> *mut Self;
 
-    fn iter_mut(&'a mut self) -> Self::EntryIterator;
+    fn iter(&'a mut self) -> Self::EntryIterator;
 
+    #[must_use]
     fn include_remnants_of_partially_used_pages(memory_region: Range<usize>) -> Range<usize> {
         (memory_region.start - memory_region.start % Self::PAGE_SIZE)..memory_region.end
     }
@@ -257,7 +206,7 @@ trait PageTable<'a>: Sized + 'a {
         virtual_memory_size: usize,
     ) -> usize {
         let mut address = virtual_memory_size;
-        for entry in self.iter_mut() {
+        for entry in self.iter() {
             entry.set(address, Self::kernel_page_flags());
             address += kernel_page_size;
         }
@@ -265,54 +214,54 @@ trait PageTable<'a>: Sized + 'a {
     }
 }
 
-trait PageTableEntry {
+pub trait PageTableEntry {
     type Flags;
-    fn set(&mut self, address: usize, flags: Self::Flags);
-    fn mark_unused(&mut self);
+    fn set(self, address: usize, flags: Self::Flags);
+    fn mark_unused(self);
 }
 
-struct IdentityMapEntryResult {
+pub struct IdentityMapEntryResult {
     memory_state: MemoryState,
     finished: bool,
 }
 
-enum Error {
+pub enum Error {
     MultibootHeaderLoad(MbiLoadError),
     NoMemoryMap,
 }
 
 #[derive(Clone, Copy)]
-struct MemoryState {
-    virtual_memory_size: usize,
-    last_frame_added_to_allocator: usize,
+pub struct MemoryState {
+    pub virtual_memory_size: usize,
+    pub last_frame_added_to_allocator: usize,
 }
 
-struct FrameAllocator<const FRAME_SIZE: usize> {
+pub struct FrameAllocator<const FRAME_SIZE: usize> {
     next: Option<*mut FrameAllocator<FRAME_SIZE>>,
 }
 
 impl<const MEMORY_FRAME_SIZE: usize> FrameAllocator<MEMORY_FRAME_SIZE> {
     const FRAME_SIZE: usize = MEMORY_FRAME_SIZE;
 
-    unsafe fn add_frames(&mut self, memory_area: Range<usize>) {
+    pub unsafe fn add_frames(&mut self, memory_area: Range<usize>) {
         for frame in memory_area.step_by(Self::FRAME_SIZE) {
             self.add_frame(frame);
         }
     }
 
-    unsafe fn get_frame(&mut self) -> Option<usize> {
+    pub unsafe fn get_frame(&mut self) -> Option<usize> {
         let ret = self.next?;
         self.next = (*ret).next;
         Some(ret as usize)
     }
 
-    unsafe fn add_frame(&mut self, frame_address: usize) {
+    pub unsafe fn add_frame(&mut self, frame_address: usize) {
         let frame_ptr = frame_address as *mut Self;
         (*frame_ptr).next = self.next;
         self.next = Some(&mut *frame_ptr);
     }
 
-    unsafe fn add_aligned_frames_with_scrap_allocator<const SMALLER_FRAME_SIZE: usize>(
+    pub unsafe fn add_aligned_frames_with_scrap_allocator<const SMALLER_FRAME_SIZE: usize>(
         &mut self,
         smaller_allocator: &mut FrameAllocator<SMALLER_FRAME_SIZE>,
         memory_region: Range<usize>,
@@ -332,9 +281,87 @@ impl<const MEMORY_FRAME_SIZE: usize> FrameAllocator<MEMORY_FRAME_SIZE> {
     }
 }
 
-struct GetFrameResponse {
-    frame: Option<usize>,
-    last_frame_added_to_allocator: usize,
+impl<const FRAME_SIZE: usize> Default for FrameAllocator<FRAME_SIZE> {
+    fn default() -> Self {
+        Self { next: None }
+    }
+}
+
+pub struct GetFrameResponse {
+    pub frame: Option<usize>,
+    pub last_frame_added_to_allocator: usize,
+}
+
+#[must_use]
+pub fn first_full_page_address(start_address: usize, page_size: usize) -> usize {
+    let page_offset = start_address % page_size;
+    if page_offset == 0 {
+        start_address
+    } else {
+        start_address + page_size - page_offset
+    }
+}
+
+#[must_use]
+pub fn end_of_last_full_page(end_address: usize, page_size: usize) -> usize {
+    end_address - end_address % page_size
+}
+
+pub unsafe fn boot_os<'a, Proc: Architecture<'a> + 'a>(
+    proc: &mut Proc,
+    multiboot_info_ptr: u32,
+) -> Result<(), Error> {
+    // Initialize available memory and set up page tables
+    let boot_info = BootInformation::load(multiboot_info_ptr as *const BootInformationHeader)
+        .map_err(Error::MultibootHeaderLoad)?;
+
+    boot_info.memory_map_tag().ok_or(Error::NoMemoryMap)?;
+    let memory_map_tag = boot_info.memory_map_tag().ok_or(Error::NoMemoryMap)?;
+    let mut physical_memory_size = 0;
+
+    // Add free frames from first 4 GB to available frame list
+    let available_memory_regions = unused_memory_regions(
+        addr_of!(header_start) as usize..addr_of!(kernel_end) as usize,
+        &boot_info,
+        Proc::INITIAL_VIRTUAL_MEMORY_SIZE,
+    );
+    for memory_area in available_memory_areas(memory_map_tag) {
+        physical_memory_size = max(physical_memory_size, memory_area_end(memory_area));
+        for memory_region in unused_memory_regions_from_area(memory_area, &available_memory_regions)
+        {
+            proc.register_memory_region(memory_region);
+        }
+    }
+
+    // Set up memory past 4 GB
+    let page_table_indices = proc.initial_page_table_counts();
+    let new_memory_state = proc.identity_map_with_offset(
+        &mut (*Proc::get_root_page_table()),
+        memory_map_tag,
+        MemoryState {
+            virtual_memory_size: Proc::INITIAL_VIRTUAL_MEMORY_SIZE,
+            last_frame_added_to_allocator: Proc::INITIAL_VIRTUAL_MEMORY_SIZE,
+        },
+        physical_memory_size,
+        page_table_indices,
+    );
+    proc.register_available_memory_areas_from_region(
+        memory_map_tag,
+        new_memory_state.last_frame_added_to_allocator..new_memory_state.virtual_memory_size,
+    );
+
+    // Reclaim memory used by boot info struct
+    proc.register_memory_region(Proc::PageTable::include_remnants_of_partially_used_pages(
+        boot_info.start_address()..boot_info.end_address(),
+    ));
+
+    Ok(())
+}
+
+extern "C" {
+    // These aren't real variables. We just need the address of the start and end of the kernel
+    static header_start: u8;
+    static kernel_end: u8;
 }
 
 // I'm only supporting 64 bit machines as of now so casting from u64 to usize shouldn't result
@@ -347,19 +374,6 @@ fn memory_area_start(area: &MemoryArea) -> usize {
 #[allow(clippy::cast_possible_truncation)]
 fn memory_area_end(area: &MemoryArea) -> usize {
     area.end_address() as usize
-}
-
-fn first_full_page_address(start_address: usize, page_size: usize) -> usize {
-    let page_offset = start_address % page_size;
-    if page_offset == 0 {
-        start_address
-    } else {
-        start_address + page_size - page_offset
-    }
-}
-
-fn end_of_last_full_page(end_address: usize, page_size: usize) -> usize {
-    end_address - end_address % page_size
 }
 
 fn intersect(a: Range<usize>, b: Range<usize>) -> Range<usize> {
@@ -396,58 +410,6 @@ fn unused_memory_regions(
             kernel_memory.end..max_address,
         ]
     }
-}
-
-unsafe fn boot_os<'a, Proc: Architecture<'a> + 'a>(
-    proc: &mut Proc,
-    multiboot_info_ptr: u32,
-) -> Result<(), Error> {
-    // Initialize available memory and set up page tables
-    let boot_info = BootInformation::load(multiboot_info_ptr as *const BootInformationHeader)
-        .map_err(Error::MultibootHeaderLoad)?;
-
-    boot_info.memory_map_tag().ok_or(Error::NoMemoryMap)?;
-    let memory_map_tag = boot_info.memory_map_tag().ok_or(Error::NoMemoryMap)?;
-    let mut physical_memory_size = 0;
-
-    // Add free frames from first 4 GB to available frame list
-    let available_memory_regions = unused_memory_regions(
-        addr_of!(header_start) as usize..addr_of!(kernel_end) as usize,
-        &boot_info,
-        Proc::INITIAL_VIRTUAL_MEMORY_SIZE,
-    );
-    for memory_area in available_memory_areas(memory_map_tag) {
-        physical_memory_size = max(physical_memory_size, memory_area_end(memory_area));
-        for memory_region in unused_memory_regions_from_area(memory_area, &available_memory_regions)
-        {
-            proc.register_memory_region(memory_region);
-        }
-    }
-
-    // Set up memory past 4 GB
-    // TODO: replace Amd64 with Proc once https://github.com/rust-lang/rust/issues/76560 is closed
-    let page_table_indices = proc.initial_page_table_counts();
-    let new_memory_state = proc.identity_map_with_offset(
-        &mut (*Proc::get_root_page_table()),
-        memory_map_tag,
-        MemoryState {
-            virtual_memory_size: Proc::INITIAL_VIRTUAL_MEMORY_SIZE,
-            last_frame_added_to_allocator: Proc::INITIAL_VIRTUAL_MEMORY_SIZE,
-        },
-        physical_memory_size,
-        page_table_indices,
-    );
-    proc.register_available_memory_areas_from_region(
-        memory_map_tag,
-        new_memory_state.last_frame_added_to_allocator..new_memory_state.virtual_memory_size,
-    );
-
-    // Reclaim memory used by boot info struct
-    proc.register_memory_region(Proc::PageTable::include_remnants_of_partially_used_pages(
-        boot_info.start_address()..boot_info.end_address(),
-    ));
-
-    Ok(())
 }
 
 fn available_memory_areas(memory_map: &MemoryMapTag) -> impl Iterator<Item = &MemoryArea> {

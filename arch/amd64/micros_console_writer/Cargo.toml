@@ -1,12 +1,9 @@
 [package]
-name = "display-daemon"
+name = "micros_console_writer"
 version = "0.1.0"
 authors = ["CalebLBaker <calebbaker774@gmail.com>"]
 license = "BSL-1.0"
 edition = "2021"
-
-[lib]
-path = "src/arch/amd64/lib.rs"
 
 [dependencies]
 volatile = "^0.5"
