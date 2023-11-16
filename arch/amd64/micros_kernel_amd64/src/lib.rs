@@ -4,11 +4,6 @@
 
 mod apic;
 
-use micros_kernel_common::{
-    boot_os, end_of_last_full_page, first_full_page_address, Architecture, Error, FrameAllocator,
-    GetFrameResponse, MemoryState, PageTable, PageTableEntry
-};
-use multiboot2::{MbiLoadError, MemoryMapTag};
 use apic::{
     error_interrupt_handler, spurious_interrupt_handler, timer_interrupt_handler, InterruptIndex,
 };
@@ -19,6 +14,12 @@ use core::{
     ptr::{addr_of, addr_of_mut},
 };
 use micros_console_writer::WRITER;
+use micros_kernel_common::{
+    boot_os, end_of_last_full_page, first_full_page_address, Architecture, Error, FrameAllocator,
+    GetFrameResponse, MemoryState, PageTable, PageTableEntry,
+};
+use multiboot2::{MbiLoadError, MemoryMapTag};
+use page_table::PageTableFlags;
 use x86_64::{
     addr::PhysAddr,
     instructions::{hlt, interrupts, tables::load_tss},
@@ -31,7 +32,6 @@ use x86_64::{
     },
     VirtAddr,
 };
-use page_table::PageTableFlags;
 
 #[no_mangle]
 pub extern "C" fn main(multiboot_info_ptr: u32, cpu_info: u32) -> ! {
@@ -43,12 +43,12 @@ pub extern "C" fn main(multiboot_info_ptr: u32, cpu_info: u32) -> ! {
         }
         Err(err) => {
             let _ = WRITER.lock().write_str(match err {
-                OsError::Generic(Error::MultibootHeaderLoad(
-                    MbiLoadError::IllegalAddress,
-                )) => "Illegal multiboot info address",
-                OsError::Generic(Error::MultibootHeaderLoad(
-                    MbiLoadError::IllegalTotalSize(_),
-                )) => "Illegal multiboot info size",
+                OsError::Generic(Error::MultibootHeaderLoad(MbiLoadError::IllegalAddress)) => {
+                    "Illegal multiboot info address"
+                }
+                OsError::Generic(Error::MultibootHeaderLoad(MbiLoadError::IllegalTotalSize(_))) => {
+                    "Illegal multiboot info size"
+                }
                 OsError::Generic(Error::MultibootHeaderLoad(MbiLoadError::NoEndTag)) => {
                     "No multiboot info end tag"
                 }
@@ -217,7 +217,8 @@ impl<'a> PageTableEntry for Amd64PageTableEntry<'a> {
     type Flags = PageTableFlags;
 
     fn set(self, address: usize, flags: PageTableFlags) {
-        self.0.set_addr(PhysAddr::new_truncate(address as u64), flags);
+        self.0
+            .set_addr(PhysAddr::new_truncate(address as u64), flags);
     }
 
     fn mark_unused(self) {
