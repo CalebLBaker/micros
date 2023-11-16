@@ -1,6 +1,9 @@
 #![no_std]
 #![feature(impl_trait_in_assoc_type)]
 #![feature(abi_x86_interrupt)]
+#![deny(clippy::all)]
+#![deny(clippy::pedantic)]
+#![allow(clippy::struct_field_names)]
 
 mod apic;
 

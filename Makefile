@@ -23,7 +23,7 @@ run: $(iso)
 	@qemu-system-x86_64 -cdrom $(iso) -d int -no-shutdown -no-reboot
 
 check: $(image)
-	@cargo clippy -- -Dwarnings -Dclippy::pedantic -Aclippy::struct_field_names -Aclippy::missing_safety_doc -Aclippy::missing_errors_doc
+	@cargo clippy 
 	@cargo audit
 
 build_kernel:
