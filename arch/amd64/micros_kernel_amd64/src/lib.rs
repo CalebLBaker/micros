@@ -7,9 +7,7 @@
 
 mod apic;
 
-use apic::{
-    error_interrupt_handler, spurious_interrupt_handler, timer_interrupt_handler, InterruptIndex,
-};
+use apic::{end_interrupt, InterruptIndex};
 use core::{
     fmt::Write,
     ops::Range,
@@ -87,6 +85,24 @@ extern "x86-interrupt" fn page_fault_handler(
     _error_code: PageFaultErrorCode,
 ) {
     halt();
+}
+
+extern "x86-interrupt" fn spurious_interrupt_handler(_: InterruptStackFrame) {
+    unsafe {
+        end_interrupt();
+    }
+}
+
+extern "x86-interrupt" fn error_interrupt_handler(_: InterruptStackFrame) {
+    unsafe {
+        end_interrupt();
+    }
+}
+
+extern "x86-interrupt" fn timer_interrupt_handler(_: InterruptStackFrame) {
+    unsafe {
+        end_interrupt();
+    }
 }
 
 const FOUR_KILOBYTES: usize = 0x1000;

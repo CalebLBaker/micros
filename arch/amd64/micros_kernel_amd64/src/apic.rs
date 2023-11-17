@@ -1,6 +1,5 @@
 use spin::Mutex;
 use x2apic::lapic::{xapic_base, LocalApic, LocalApicBuilder};
-use x86_64::structures::idt::InterruptStackFrame;
 
 #[derive(Debug, Clone, Copy)]
 #[repr(u8)]
@@ -17,21 +16,9 @@ pub unsafe fn init() -> Result<(), &'static str> {
     Ok(())
 }
 
-pub extern "x86-interrupt" fn spurious_interrupt_handler(_: InterruptStackFrame) {
-    unsafe {
-        end_interrupt();
-    }
-}
-
-pub extern "x86-interrupt" fn error_interrupt_handler(_: InterruptStackFrame) {
-    unsafe {
-        end_interrupt();
-    }
-}
-
-pub extern "x86-interrupt" fn timer_interrupt_handler(_: InterruptStackFrame) {
-    unsafe {
-        end_interrupt();
+pub unsafe fn end_interrupt() {
+    if let Some(apic) = LOCAL_APIC.lock().as_mut() {
+        apic.end_of_interrupt();
     }
 }
 
@@ -50,10 +37,4 @@ fn create_apic_builder() -> LocalApicBuilder {
 
 fn set_local_apic(apic: LocalApic) {
     *LOCAL_APIC.lock() = Some(apic);
-}
-
-unsafe fn end_interrupt() {
-    if let Some(apic) = LOCAL_APIC.lock().as_mut() {
-        apic.end_of_interrupt();
-    }
 }
