@@ -74,7 +74,9 @@ extern "C" {
     static mut p2_tables: [Amd64PageTable; 2];
 }
 
-extern "x86-interrupt" fn breakpoint_handler(_stack_frame: InterruptStackFrame) {}
+extern "x86-interrupt" fn breakpoint_handler(_stack_frame: InterruptStackFrame) {
+    let _ = WRITER.lock().write_str("breakpoint\n");
+}
 
 extern "x86-interrupt" fn double_fault_handler(stack_frame: InterruptStackFrame, _: u64) -> ! {
     panic!("Double Fault\n{:#?}", stack_frame);
@@ -84,22 +86,32 @@ extern "x86-interrupt" fn page_fault_handler(
     _stack_frame: InterruptStackFrame,
     _error_code: PageFaultErrorCode,
 ) {
+    let _ = WRITER.lock().write_str("page fault\n");
     halt();
 }
 
 extern "x86-interrupt" fn spurious_interrupt_handler(_: InterruptStackFrame) {
+    let _ = WRITER.lock().write_str("spurious\n");
     unsafe {
         end_interrupt();
     }
 }
 
 extern "x86-interrupt" fn error_interrupt_handler(_: InterruptStackFrame) {
+    let _ = WRITER.lock().write_str("error\n");
     unsafe {
         end_interrupt();
     }
 }
 
-extern "x86-interrupt" fn timer_interrupt_handler(_: InterruptStackFrame) {
+extern "x86-interrupt" fn timer_interrupt_handler(stack_frame: InterruptStackFrame) {
+    let _ = write!(
+        WRITER.lock(),
+        "timer: stack frame: {:?}\naddr: {:}\n",
+        stack_frame,
+        addr_of!(stack_frame) as usize
+    );
+    let _ = WRITER.lock().write_str("timer\n");
     unsafe {
         end_interrupt();
     }
@@ -112,7 +124,6 @@ const GIGABYTE: usize = 0x4000_0000;
 const GIGABYTE_PAGES_CPUID_BIT: u32 = 0x400_0000;
 
 const DOUBLE_FAULT_IST_INDEX: u16 = 0;
-
 const DOUBLE_FAULT_STACK_SIZE: usize = FOUR_KILOBYTES;
 
 static mut IDT: InterruptDescriptorTable = InterruptDescriptorTable::new();

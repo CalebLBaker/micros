@@ -14,15 +14,17 @@ MULTIBOOT_CHECK       equ 0x36d76289
 CPUID_BIT             equ 1 << 21
 GIGABYTE_PAGES_CPUID_BIT equ 1 << 26
 LONG_MODE_CPUID_BIT   equ 1 << 29
-PAGE_SIZE             equ 4 * 1024
+PAGE_SIZE             equ 0x1000
 PAGE_TABLE_ENTRY_SIZE equ 8
-STACK_SIZE            equ 256 * PAGE_SIZE
-HUGE_PAGE_SIZE        equ 2 * 1024 * 1024
+HUGE_PAGE_SIZE        equ 0x200000
+STACK_SIZE            equ 0x2000
 GIGABYTE              equ 1024 * 1024 * 1024
 NUM_P2_TABLES         equ 4
 PRESENT_WRITABLE      equ 3
 PRESENT_WRITABLE_HUGE equ (0x80 + PRESENT_WRITABLE)
 PAGE_TABLE_ENTRIES    equ 512
+LAST_PAGE_TABLE_ENTRY equ PAGE_SIZE - PAGE_TABLE_ENTRY_SIZE
+SECOND_TO_LAST_PAGE_TABLE_ENTRY equ LAST_PAGE_TABLE_ENTRY - PAGE_TABLE_ENTRY_SIZE
 PAE_FLAG              equ 1 << 5
 LONG_MODE_EFER        equ 1 << 8
 EFER_MSR              equ 0xC0000080
@@ -58,8 +60,12 @@ header_end:
 global p4_table
 global p2_tables
 section .bss
-; Page tables
+; Stack
 align PAGE_SIZE
+stack_bottom:
+    resb STACK_SIZE
+
+; Page tables
 p4_table:
     resb PAGE_SIZE
 p3_table:
@@ -67,10 +73,12 @@ p3_table:
 ; Allow 4 p2 tables so we can identity map 4 GB
 p2_tables:
     resb NUM_P2_TABLES * PAGE_SIZE
-; Stack
-stack_bottom:
-    resb STACK_SIZE
-stack_top:
+p3_table_for_stack:
+    resb PAGE_SIZE
+p2_table_for_stack:
+    resb PAGE_SIZE
+p1_table_for_stack:
+	resb PAGE_SIZE
 
 section .rodata
 gdt64:
@@ -87,7 +95,6 @@ extern long_mode_start
 section .text
 bits 32
 _start:
-    mov esp, stack_top
 
     ; Make sure the kernel was loaded by a multiboot compliant bootloader
     cmp eax, MULTIBOOT_CHECK
@@ -142,7 +149,30 @@ _start:
     add eax, GIGABYTE
     mov [p3_table + 3 * PAGE_TABLE_ENTRY_SIZE], eax
 
-.done_mapping_page_tables:
+.done_mapping_low_page_tables:
+
+	; Map the stack to high memory with nothing mapped directly below it
+	; so that stack overflows will trigger page faults
+	mov eax, p3_table_for_stack
+	or eax, PRESENT_WRITABLE
+	mov [p4_table + LAST_PAGE_TABLE_ENTRY], eax
+
+	mov eax, p2_table_for_stack
+	or eax, PRESENT_WRITABLE
+	mov [p3_table_for_stack + LAST_PAGE_TABLE_ENTRY], eax
+
+	mov eax, p1_table_for_stack
+	or eax, PRESENT_WRITABLE
+	mov [p2_table_for_stack + LAST_PAGE_TABLE_ENTRY], eax
+
+	mov eax, stack_bottom
+	or eax, PRESENT_WRITABLE
+	mov [p1_table_for_stack + SECOND_TO_LAST_PAGE_TABLE_ENTRY], eax
+
+	mov eax, stack_bottom + PAGE_SIZE
+	or eax, PRESENT_WRITABLE
+	mov [p1_table_for_stack + LAST_PAGE_TABLE_ENTRY], eax
+
     ; load p4 to cr3
     mov eax, p4_table
     mov cr3, eax
@@ -193,7 +223,7 @@ _start:
     cmp ecx, edx
     jne .map_p2_table
 
-    jmp .done_mapping_page_tables
+    jmp .done_mapping_low_page_tables
 
 .no_multiboot:
     mov al, NO_MULTIBOOT
