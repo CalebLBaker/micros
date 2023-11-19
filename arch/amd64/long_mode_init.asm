@@ -3,6 +3,8 @@ global long_mode_start
 section .text
 bits 64
 long_mode_start:
+    mov rsp, 0xffffffffffffffff
+
     ; null out segment registers
     mov ax, 0
     mov ss, ax

@@ -104,13 +104,7 @@ extern "x86-interrupt" fn error_interrupt_handler(_: InterruptStackFrame) {
     }
 }
 
-extern "x86-interrupt" fn timer_interrupt_handler(stack_frame: InterruptStackFrame) {
-    let _ = write!(
-        WRITER.lock(),
-        "timer: stack frame: {:?}\naddr: {:}\n",
-        stack_frame,
-        addr_of!(stack_frame) as usize
-    );
+extern "x86-interrupt" fn timer_interrupt_handler(_: InterruptStackFrame) {
     let _ = WRITER.lock().write_str("timer\n");
     unsafe {
         end_interrupt();

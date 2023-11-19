@@ -12,6 +12,7 @@ pub enum InterruptIndex {
 pub unsafe fn init() -> Result<(), &'static str> {
     let mut apic = create_apic_builder().set_xapic_base(xapic_base()).build()?;
     apic.enable();
+    apic.disable_timer();
     set_local_apic(apic);
     Ok(())
 }
