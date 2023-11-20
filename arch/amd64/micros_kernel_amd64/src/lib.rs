@@ -71,15 +71,17 @@ fn panic(info: &PanicInfo) -> ! {
 
 extern "C" {
     static mut p4_table: Amd64PageTable;
-    static mut p2_tables: [Amd64PageTable; 2];
+    static mut p2_tables: [page_table::PageTable; 2];
+    static mut p1_table_for_stack: page_table::PageTable;
 }
 
 extern "x86-interrupt" fn breakpoint_handler(_stack_frame: InterruptStackFrame) {
     let _ = WRITER.lock().write_str("breakpoint\n");
 }
 
-extern "x86-interrupt" fn double_fault_handler(stack_frame: InterruptStackFrame, _: u64) -> ! {
-    panic!("Double Fault\n{:#?}", stack_frame);
+extern "x86-interrupt" fn double_fault_handler(_stack_frame: InterruptStackFrame, _: u64) -> ! {
+    let _ = WRITER.lock().write_str("double fault\n");
+    halt();
 }
 
 extern "x86-interrupt" fn page_fault_handler(
@@ -120,11 +122,16 @@ const GIGABYTE_PAGES_CPUID_BIT: u32 = 0x400_0000;
 const DOUBLE_FAULT_IST_INDEX: u16 = 0;
 const DOUBLE_FAULT_STACK_SIZE: usize = FOUR_KILOBYTES;
 
+const DOUBLE_FAULT_STACK_BOTTOM: *mut u8 = 0xffff_ffff_ffe0_1000 as *mut u8;
+const DOUBLE_FAULT_STACK_TOP: VirtAddr = VirtAddr::new_truncate(0xffff_ffff_ffe0_2000);
+
 static mut IDT: InterruptDescriptorTable = InterruptDescriptorTable::new();
 
 static mut TSS: TaskStateSegment = TaskStateSegment::new();
 
 static mut GDT: GlobalDescriptorTable = GlobalDescriptorTable::new();
+
+static mut DOUBLE_FAULT_STACK: DoubleFaultStack = DoubleFaultStack([0; DOUBLE_FAULT_STACK_SIZE]);
 
 enum OsError {
     Apic(&'static str),
@@ -268,7 +275,7 @@ impl<'a> PageTable<'a> for Amd64PageTable {
     }
 
     fn kernel_page_table_flags() -> PageTableFlags {
-        PageTableFlags::PRESENT | PageTableFlags::WRITABLE
+        PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::USER_ACCESSIBLE
     }
 
     fn kernel_page_flags() -> PageTableFlags {
@@ -281,9 +288,20 @@ struct SegmentSelectors {
     tss_selector: SegmentSelector,
 }
 
+#[repr(C, align(0x1000))]
+struct DoubleFaultStack([u8; DOUBLE_FAULT_STACK_SIZE]);
+
+fn kernel_stack_flags() -> PageTableFlags {
+    PageTableFlags::PRESENT | PageTableFlags::WRITABLE
+}
+
 unsafe fn run_operating_system(multiboot_info_ptr: u32, cpu_info: u32) -> Result<(), OsError> {
-    static mut DOUBLE_FAULT_STACK: [u8; DOUBLE_FAULT_STACK_SIZE] = [0; DOUBLE_FAULT_STACK_SIZE];
-    let segment_selectors = load_gdt(&mut GDT, &mut TSS, VirtAddr::from_ptr(&DOUBLE_FAULT_STACK));
+    p1_table_for_stack[0x001].set_addr(
+        PhysAddr::new_truncate(addr_of!(DOUBLE_FAULT_STACK) as u64),
+        kernel_stack_flags(),
+    );
+
+    let segment_selectors = load_gdt(&mut GDT, &mut TSS);
     CS::set_reg(segment_selectors.code_selector);
     load_tss(segment_selectors.tss_selector);
     IDT.breakpoint.set_handler_fn(breakpoint_handler);
@@ -294,6 +312,11 @@ unsafe fn run_operating_system(multiboot_info_ptr: u32, cpu_info: u32) -> Result
     IDT.load();
     apic::init().map_err(OsError::Apic)?;
     interrupts::enable();
+
+    // Without this line the double fault handler triggers a page fault and I have no idea why
+    // I've tried flushing the translation lookaside buffer and that doesn't appear to have any
+    // affect
+    DOUBLE_FAULT_STACK_BOTTOM.write_volatile(0xff);
 
     boot_os(
         &mut if supports_gigabyte_pages(cpu_info) {
@@ -330,10 +353,8 @@ fn supports_gigabyte_pages(cpu_info: u32) -> bool {
 fn load_gdt(
     gdt: &'static mut GlobalDescriptorTable,
     tss: &'static mut TaskStateSegment,
-    double_fault_stack: VirtAddr,
 ) -> SegmentSelectors {
-    tss.interrupt_stack_table[DOUBLE_FAULT_IST_INDEX as usize] =
-        double_fault_stack + DOUBLE_FAULT_STACK_SIZE;
+    tss.interrupt_stack_table[DOUBLE_FAULT_IST_INDEX as usize] = DOUBLE_FAULT_STACK_TOP;
     let code_selector = gdt.add_entry(Descriptor::kernel_code_segment());
     let tss_selector = gdt.add_entry(Descriptor::tss_segment(tss));
     gdt.load();

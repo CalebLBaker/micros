@@ -20,8 +20,8 @@ HUGE_PAGE_SIZE        equ 0x200000
 STACK_SIZE            equ 0x2000
 GIGABYTE              equ 1024 * 1024 * 1024
 NUM_P2_TABLES         equ 4
-PRESENT_WRITABLE      equ 3
-PRESENT_WRITABLE_HUGE equ (0x80 + PRESENT_WRITABLE)
+PAGE_TABLE_FLAGS      equ 7
+PAGE_FLAGS equ (0x80 + PAGE_TABLE_FLAGS)
 PAGE_TABLE_ENTRIES    equ 512
 LAST_PAGE_TABLE_ENTRY equ PAGE_SIZE - PAGE_TABLE_ENTRY_SIZE
 SECOND_TO_LAST_PAGE_TABLE_ENTRY equ LAST_PAGE_TABLE_ENTRY - PAGE_TABLE_ENTRY_SIZE
@@ -59,6 +59,7 @@ header_end:
 
 global p4_table
 global p2_tables
+global p1_table_for_stack
 section .bss
 ; Stack
 align PAGE_SIZE
@@ -132,7 +133,7 @@ _start:
 
     ; Set up p4 table with 1 entry
     mov eax, p3_table
-    or eax, PRESENT_WRITABLE
+    or eax, PAGE_TABLE_FLAGS
     mov [p4_table], eax
 
 	; Test for GB page support
@@ -140,7 +141,7 @@ _start:
 	jz .map_p3_table_no_gigabyte_pages
 
     ; Set up p3 table with 4 entries
-    mov eax, PRESENT_WRITABLE_HUGE
+    mov eax, PAGE_FLAGS
     mov [p3_table], eax
     add eax, GIGABYTE
     mov [p3_table + PAGE_TABLE_ENTRY_SIZE], eax
@@ -154,23 +155,23 @@ _start:
 	; Map the stack to high memory with nothing mapped directly below it
 	; so that stack overflows will trigger page faults
 	mov eax, p3_table_for_stack
-	or eax, PRESENT_WRITABLE
+	or eax, PAGE_TABLE_FLAGS
 	mov [p4_table + LAST_PAGE_TABLE_ENTRY], eax
 
 	mov eax, p2_table_for_stack
-	or eax, PRESENT_WRITABLE
+	or eax, PAGE_TABLE_FLAGS
 	mov [p3_table_for_stack + LAST_PAGE_TABLE_ENTRY], eax
 
 	mov eax, p1_table_for_stack
-	or eax, PRESENT_WRITABLE
+	or eax, PAGE_TABLE_FLAGS
 	mov [p2_table_for_stack + LAST_PAGE_TABLE_ENTRY], eax
 
 	mov eax, stack_bottom
-	or eax, PRESENT_WRITABLE
+	or eax, PAGE_TABLE_FLAGS
 	mov [p1_table_for_stack + SECOND_TO_LAST_PAGE_TABLE_ENTRY], eax
 
 	mov eax, stack_bottom + PAGE_SIZE
-	or eax, PRESENT_WRITABLE
+	or eax, PAGE_TABLE_FLAGS
 	mov [p1_table_for_stack + LAST_PAGE_TABLE_ENTRY], eax
 
     ; load p4 to cr3
@@ -201,7 +202,7 @@ _start:
 .map_p3_table_no_gigabyte_pages:
     ; Set up p3 table with 4 entries
     mov eax, p2_tables
-    or eax, PRESENT_WRITABLE
+    or eax, PAGE_TABLE_FLAGS
     mov [p3_table], eax
     add eax, PAGE_SIZE
     mov [p3_table + PAGE_TABLE_ENTRY_SIZE], eax
@@ -214,7 +215,7 @@ _start:
     mov ecx, p2_tables ; ecx is the address of the table entry to edit
     mov edx, NUM_P2_TABLES * PAGE_SIZE
     add edx, ecx ; edx is the address of the end of the last table to edit
-    mov ebx, PRESENT_WRITABLE_HUGE ; ebx is the page table entry value
+    mov ebx, PAGE_FLAGS ; ebx is the page table entry value
 
 .map_p2_table:
     mov [ecx], ebx
