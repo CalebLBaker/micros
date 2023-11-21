@@ -53,6 +53,9 @@ pub extern "C" fn main(multiboot_info_ptr: u32, cpu_info: u32) -> ! {
                 OsError::Generic(Error::MultibootHeaderLoad(MbiLoadError::NoEndTag)) => {
                     "No multiboot info end tag"
                 }
+                OsError::Generic(Error::NoMemoryManager) => {
+                    "Memory manager not loaded by boot loader"
+                }
                 OsError::Apic(err) => err,
                 OsError::Generic(Error::NoMemoryMap) => {
                     "No memory map tag in multiboot information"

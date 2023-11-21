@@ -11,31 +11,28 @@ SPACE         equ 0x4f204f20
 
 ; Miscelaneous constants
 MULTIBOOT_CHECK       equ 0x36d76289
-CPUID_BIT             equ 1 << 21
-GIGABYTE_PAGES_CPUID_BIT equ 1 << 26
-LONG_MODE_CPUID_BIT   equ 1 << 29
+CPUID_BIT             equ 0x200000
+GIGABYTE_PAGES_CPUID_BIT equ 0x4000000
+LONG_MODE_CPUID_BIT   equ 0x20000000
 PAGE_SIZE             equ 0x1000
 PAGE_TABLE_ENTRY_SIZE equ 8
-HUGE_PAGE_SIZE        equ 0x200000
-STACK_SIZE            equ 0x2000
-GIGABYTE              equ 1024 * 1024 * 1024
+GIGABYTE              equ 0x40000000
 NUM_P2_TABLES         equ 4
 PAGE_TABLE_FLAGS      equ 7
 PAGE_FLAGS equ (0x80 + PAGE_TABLE_FLAGS)
-PAGE_TABLE_ENTRIES    equ 512
 LAST_PAGE_TABLE_ENTRY equ PAGE_SIZE - PAGE_TABLE_ENTRY_SIZE
-SECOND_TO_LAST_PAGE_TABLE_ENTRY equ LAST_PAGE_TABLE_ENTRY - PAGE_TABLE_ENTRY_SIZE
-PAE_FLAG              equ 1 << 5
-LONG_MODE_EFER        equ 1 << 8
+PHYSICAL_ADDRESS_EXPANSION equ 0x20
+LONG_MODE_EFER        equ 0x100
 EFER_MSR              equ 0xC0000080
-PAGING_FLAG           equ 1 << 31
-LONG_CODE_SEGMENT     equ (1<<43) + (1<<44) + (1<<47) + (1<<53)
+PAGING_FLAG           equ 0x80000000
+LONG_CODE_SEGMENT     equ 0x20980000000000
+MODULE_ALIGNMENT_TAG  equ 6
+MULTIBOOT_END_TAG     equ 0
 
 ; Error codes
 NO_MULTIBOOT equ "0"
 NO_CPUID     equ "1"
 NO_LONG_MODE equ "2"
-NO_KERNEL    equ "9"
 
 ; Declare a multiboot header that marks the program as a kernel.
 ; Format is documented in the multiboot standard
@@ -51,8 +48,13 @@ header_start:
     ; checksum
     dd -(MULTIBOOT_2 + X86 + HEADER_LENGTH)
 
+	; module alignment tag
+	dw MODULE_ALIGNMENT_TAG ; type
+	dw 0 ; flags
+	dd 8 ; size
+
     ; required end tag
-    dw 0 ; type
+    dw MULTIBOOT_END_TAG ; type
     dw 0 ; flags
     dd 8 ; size
 header_end:
@@ -64,7 +66,7 @@ section .bss
 ; Stack
 align PAGE_SIZE
 stack_bottom:
-    resb STACK_SIZE
+    resb 0x2000
 
 ; Page tables
 p4_table:
@@ -168,7 +170,7 @@ _start:
 
 	mov eax, stack_bottom
 	or eax, PAGE_TABLE_FLAGS
-	mov [p1_table_for_stack + SECOND_TO_LAST_PAGE_TABLE_ENTRY], eax
+	mov [p1_table_for_stack + LAST_PAGE_TABLE_ENTRY - PAGE_TABLE_ENTRY_SIZE], eax
 
 	mov eax, stack_bottom + PAGE_SIZE
 	or eax, PAGE_TABLE_FLAGS
@@ -180,7 +182,7 @@ _start:
 
     ; enable physical address extension
     mov eax, cr4
-    or eax, PAE_FLAG
+    or eax, PHYSICAL_ADDRESS_EXPANSION
     mov cr4, eax
     ; set long mode bit
     mov ecx, EFER_MSR
@@ -219,7 +221,7 @@ _start:
 
 .map_p2_table:
     mov [ecx], ebx
-    add ebx, HUGE_PAGE_SIZE
+    add ebx, 0x200000
     add ecx, PAGE_TABLE_ENTRY_SIZE
     cmp ecx, edx
     jne .map_p2_table

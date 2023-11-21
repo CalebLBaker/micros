@@ -232,6 +232,7 @@ pub struct IdentityMapEntryResult {
 pub enum Error {
     MultibootHeaderLoad(MbiLoadError),
     NoMemoryMap,
+    NoMemoryManager,
 }
 
 #[derive(Clone, Copy)]
@@ -353,6 +354,17 @@ pub unsafe fn boot_os<'a, Proc: Architecture<'a> + 'a>(
         memory_map_tag,
         new_memory_state.last_frame_added_to_allocator..new_memory_state.virtual_memory_size,
     );
+
+    boot_info
+        .module_tags()
+        .find(|module| {
+            if let Ok(command) = module.cmdline() {
+                command.contains("memory_manager")
+            } else {
+                false
+            }
+        })
+        .ok_or(Error::NoMemoryManager)?;
 
     // Reclaim memory used by boot info struct
     proc.register_memory_region(Proc::PageTable::include_remnants_of_partially_used_pages(
