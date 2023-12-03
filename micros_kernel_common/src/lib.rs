@@ -6,8 +6,10 @@
 
 use core::{
     cmp::{max, min},
+    iter::once,
     ops::Range,
     ptr::addr_of,
+    slice,
 };
 
 use multiboot2::{
@@ -19,7 +21,13 @@ pub trait Architecture<'a>: Sized {
 
     type PageTable: PageTable<'a>;
 
+    type ExecutableHeader: ExecutableHeader;
+
+    type SegmentHeader: SegmentHeader;
+
     unsafe fn get_root_page_table() -> *mut Self::PageTable;
+
+    unsafe fn initialize_memory_manager_page_tables(&mut self) -> Option<*mut Self::PageTable>;
 
     unsafe fn register_memory_region(&mut self, memory_region: Range<usize>);
 
@@ -184,6 +192,21 @@ pub trait Architecture<'a>: Sized {
     }
 }
 
+pub trait ExecutableHeader {
+    fn is_valid(&self, file_size: usize) -> bool;
+
+    fn num_segments(&self) -> usize;
+
+    fn segment_header_table_offset(&self) -> usize;
+}
+
+pub trait SegmentHeader {
+    fn segment_type(&self) -> u32;
+    fn offset(&self) -> usize;
+    fn virtual_address(&self) -> usize;
+    fn file_size(&self) -> usize;
+}
+
 pub trait PageTable<'a>: Sized + 'a {
     const PAGE_SIZE: usize;
 
@@ -233,6 +256,9 @@ pub enum Error {
     MultibootHeaderLoad(MbiLoadError),
     NoMemoryMap,
     NoMemoryManager,
+    AssertionError,
+    InvalidMemoryManagerModule,
+    FailedToSetupMemoryManagerAddressSpace,
 }
 
 #[derive(Clone, Copy)]
@@ -273,9 +299,13 @@ impl<const MEMORY_FRAME_SIZE: usize> FrameAllocator<MEMORY_FRAME_SIZE> {
     ) {
         let first_page = first_full_page_address(memory_region.start, Self::FRAME_SIZE);
         let end_of_last_page = end_of_last_full_page(memory_region.end, Self::FRAME_SIZE);
-        smaller_allocator.add_aligned_frames(memory_region.start..first_page);
-        self.add_frames(first_page..end_of_last_page);
-        smaller_allocator.add_aligned_frames(end_of_last_page..end_of_last_page);
+        if end_of_last_page > first_page {
+            smaller_allocator.add_aligned_frames(memory_region.start..first_page);
+            self.add_frames(first_page..end_of_last_page);
+            smaller_allocator.add_aligned_frames(end_of_last_page..memory_region.end);
+        } else {
+            smaller_allocator.add_aligned_frames(memory_region);
+        }
     }
 
     unsafe fn add_aligned_frames(&mut self, memory_region: Range<usize>) {
@@ -325,16 +355,49 @@ pub unsafe fn boot_os<'a, Proc: Architecture<'a> + 'a>(
     let mut physical_memory_size = 0;
 
     // Add free frames from first 4 GB to available frame list
-    let available_memory_regions = unused_memory_regions(
+    let memory_manager_bounds =
+        memory_manager_executable(&boot_info).ok_or(Error::NoMemoryManager)?;
+
+    let mut memory_regions_in_use = [
         addr_of!(header_start) as usize..addr_of!(kernel_end) as usize,
-        &boot_info,
+        boot_info.start_address()..boot_info.end_address(),
+        memory_manager_bounds.clone(),
+    ];
+    let available_memory_regions = unused_memory_regions(
+        &mut memory_regions_in_use,
         Proc::INITIAL_VIRTUAL_MEMORY_SIZE,
-    );
-    for memory_area in available_memory_areas(memory_map_tag) {
+    )
+    .ok_or(Error::AssertionError)?;
+    for memory_area in available_memory_areas(memory_map_tag).take(2) {
         physical_memory_size = max(physical_memory_size, memory_area_end(memory_area));
-        for memory_region in unused_memory_regions_from_area(memory_area, &available_memory_regions)
+        for memory_region in
+            unused_memory_regions_from_area(memory_area, available_memory_regions.clone())
         {
             proc.register_memory_region(memory_region);
+        }
+    }
+
+    let _memory_manager_root_page_table = proc
+        .initialize_memory_manager_page_tables()
+        .ok_or(Error::FailedToSetupMemoryManagerAddressSpace)?;
+
+    let memory_manager_elf_header =
+        &*(memory_manager_bounds.start as *const Proc::ExecutableHeader);
+
+    if !memory_manager_elf_header.is_valid(memory_manager_bounds.len()) {
+        return Err(Error::InvalidMemoryManagerModule);
+    }
+
+    for segment_header in slice::from_raw_parts(
+        (memory_manager_bounds.start + memory_manager_elf_header.segment_header_table_offset())
+            as *const Proc::SegmentHeader,
+        memory_manager_elf_header.num_segments(),
+    )
+    .iter()
+    .filter(|header| header.segment_type() == ELF_LOADABLE_SEGMENT)
+    {
+        if segment_header.offset() + segment_header.file_size() > memory_manager_bounds.len() {
+            return Err(Error::InvalidMemoryManagerModule);
         }
     }
 
@@ -355,17 +418,6 @@ pub unsafe fn boot_os<'a, Proc: Architecture<'a> + 'a>(
         new_memory_state.last_frame_added_to_allocator..new_memory_state.virtual_memory_size,
     );
 
-    boot_info
-        .module_tags()
-        .find(|module| {
-            if let Ok(command) = module.cmdline() {
-                command.contains("memory_manager")
-            } else {
-                false
-            }
-        })
-        .ok_or(Error::NoMemoryManager)?;
-
     // Reclaim memory used by boot info struct
     proc.register_memory_region(Proc::PageTable::include_remnants_of_partially_used_pages(
         boot_info.start_address()..boot_info.end_address(),
@@ -380,6 +432,8 @@ extern "C" {
     static kernel_end: u8;
 }
 
+const ELF_LOADABLE_SEGMENT: u32 = 1;
+
 // I'm only supporting 64 bit machines as of now so casting from u64 to usize shouldn't result
 // in any truncation. Will need to revisit if I ever add support for 32 bit machines.
 #[allow(clippy::cast_possible_truncation)]
@@ -392,40 +446,45 @@ fn memory_area_end(area: &MemoryArea) -> usize {
     area.end_address() as usize
 }
 
+fn memory_manager_executable(boot_info: &BootInformation) -> Option<Range<usize>> {
+    let memory_manager = boot_info.module_tags().find(|module| {
+        if let Ok(command) = module.cmdline() {
+            command.contains("memory_manager")
+        } else {
+            false
+        }
+    })?;
+    Some(memory_manager.start_address() as usize..memory_manager.end_address() as usize)
+}
+
 fn intersect(a: Range<usize>, b: Range<usize>) -> Range<usize> {
     max(a.start, b.start)..min(a.end, b.end)
 }
 
-fn unused_memory_regions_from_area<'a>(
+fn unused_memory_regions_from_area<'a, RangeIter: Iterator<Item = Range<usize>> + 'a>(
     memory_area: &'a MemoryArea,
-    unused_memory_regions: &'a [Range<usize>],
+    unused_memory_regions: RangeIter,
 ) -> impl Iterator<Item = Range<usize>> + 'a {
     let area = memory_area_start(memory_area)..memory_area_end(memory_area);
     unused_memory_regions
-        .iter()
         .map(move |region| intersect(area.clone(), region.clone()))
         .filter(|region| !region.is_empty())
 }
 
 fn unused_memory_regions(
-    kernel_memory: Range<usize>,
-    boot_info: &BootInformation,
+    memory_regions_in_use: &mut [Range<usize>],
     max_address: usize,
-) -> [Range<usize>; 3] {
-    let boot_info_start = boot_info.start_address();
-    if kernel_memory.start < boot_info_start {
-        [
-            0..kernel_memory.start,
-            kernel_memory.end..boot_info_start,
-            boot_info.end_address()..max_address,
-        ]
-    } else {
-        [
-            0..boot_info_start,
-            boot_info.end_address()..kernel_memory.start,
-            kernel_memory.end..max_address,
-        ]
-    }
+) -> Option<impl Iterator<Item = Range<usize>> + Clone + '_> {
+    memory_regions_in_use.sort_unstable_by(|a, b| a.start.cmp(&b.start));
+    Some(
+        once(0..memory_regions_in_use.first()?.start)
+            .chain(
+                memory_regions_in_use
+                    .windows(2)
+                    .map(|window| window[0].end..window[1].start),
+            )
+            .chain(once(memory_regions_in_use.last()?.end..max_address)),
+    )
 }
 
 fn available_memory_areas(memory_map: &MemoryMapTag) -> impl Iterator<Item = &MemoryArea> {

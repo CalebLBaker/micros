@@ -10,14 +10,15 @@ mod apic;
 use apic::{end_interrupt, InterruptIndex};
 use core::{
     fmt::Write,
+    mem::size_of,
     ops::Range,
     panic::PanicInfo,
     ptr::{addr_of, addr_of_mut},
 };
 use micros_console_writer::WRITER;
 use micros_kernel_common::{
-    boot_os, end_of_last_full_page, first_full_page_address, Architecture, Error, FrameAllocator,
-    GetFrameResponse, MemoryState, PageTable, PageTableEntry,
+    boot_os, end_of_last_full_page, first_full_page_address, Architecture, Error, ExecutableHeader,
+    FrameAllocator, GetFrameResponse, MemoryState, PageTable, PageTableEntry, SegmentHeader,
 };
 use multiboot2::{MbiLoadError, MemoryMapTag};
 use page_table::PageTableFlags;
@@ -56,10 +57,17 @@ pub extern "C" fn main(multiboot_info_ptr: u32, cpu_info: u32) -> ! {
                 OsError::Generic(Error::NoMemoryManager) => {
                     "Memory manager not loaded by boot loader"
                 }
-                OsError::Apic(err) => err,
                 OsError::Generic(Error::NoMemoryMap) => {
                     "No memory map tag in multiboot information"
                 }
+                OsError::Generic(Error::InvalidMemoryManagerModule) => {
+                    "Could not load memory manager"
+                }
+                OsError::Generic(Error::AssertionError) => "An unexpected error occurred",
+                OsError::Generic(Error::FailedToSetupMemoryManagerAddressSpace) => {
+                    "Failed to setup memory manager address space"
+                }
+                OsError::Apic(err) => err,
             });
         }
     }
@@ -128,6 +136,12 @@ const DOUBLE_FAULT_STACK_SIZE: usize = FOUR_KILOBYTES;
 const DOUBLE_FAULT_STACK_BOTTOM: *mut u8 = 0xffff_ffff_ffe0_1000 as *mut u8;
 const DOUBLE_FAULT_STACK_TOP: VirtAddr = VirtAddr::new_truncate(0xffff_ffff_ffe0_2000);
 
+const ELF_MAGIC_NUMBER: u32 = 0x464c_457f;
+const ELF_64_BIT: u8 = 2;
+const ELF_LITTLE_ENDIAN: u8 = 1;
+const ELF_EXECUTABLE: u16 = 2;
+const ELF_X86_64: u16 = 0x3e;
+
 static mut IDT: InterruptDescriptorTable = InterruptDescriptorTable::new();
 
 static mut TSS: TaskStateSegment = TaskStateSegment::new();
@@ -178,32 +192,72 @@ impl<'a> Architecture<'a> for Amd64 {
 
     type PageTable = Amd64PageTable;
 
+    type ExecutableHeader = ElfHeader;
+
+    type SegmentHeader = ProgramHeader;
+
     unsafe fn get_root_page_table() -> *mut Self::PageTable {
         addr_of_mut!(p4_table)
+    }
+
+    unsafe fn initialize_memory_manager_page_tables(&mut self) -> Option<*mut Self::PageTable> {
+        let root_table_pointer = self.get_4k_frame()? as *mut Self::PageTable;
+        let root_table = &mut (*root_table_pointer).0;
+        root_table[0] = (*Self::get_root_page_table()).0[0].clone();
+
+        let p3_table_addr = self.get_4k_frame()?;
+        let p3_table = p3_table_addr as *mut page_table::PageTable;
+        let flags = Amd64PageTable::kernel_page_table_flags();
+        set_last_entry(root_table, p3_table_addr, flags);
+
+        let p2_table_addr = self.get_4k_frame()?;
+        let p2_table = p2_table_addr as *mut page_table::PageTable;
+        set_last_entry(&mut *p3_table, p2_table_addr, flags);
+
+        if let Some(huge_stack) = self.get_2mb_frame() {
+            set_last_entry(
+                &mut *p2_table,
+                huge_stack,
+                Amd64PageTable::kernel_page_flags(),
+            );
+        } else {
+            let p1_table_addr = self.get_4k_frame()?;
+            let p1_table = p1_table_addr as *mut page_table::PageTable;
+            set_last_entry(&mut *p2_table, p1_table_addr, flags);
+
+            set_last_entry(&mut *p1_table, self.get_4k_frame()?, flags);
+            set_entry(&mut *p1_table, 0x1fd, self.get_4k_frame()?, flags);
+            set_entry(&mut *p1_table, 0x1fc, self.get_4k_frame()?, flags);
+            set_entry(&mut *p1_table, 0x1fb, self.get_4k_frame()?, flags);
+        }
+
+        Some(root_table_pointer)
     }
 
     unsafe fn register_memory_region(&mut self, memory_region: Range<usize>) {
         if let Some(ref mut gb_allocator) = self.gigabyte_pages {
             let first_gb_page = first_full_page_address(memory_region.start, GIGABYTE);
             let end_of_last_gb_page = end_of_last_full_page(memory_region.end, GIGABYTE);
-            self.two_megabyte_pages
-                .add_aligned_frames_with_scrap_allocator(
-                    &mut self.four_kilobyte_pages,
-                    memory_region.start..first_gb_page,
-                );
-            gb_allocator.add_frames(first_gb_page..end_of_last_gb_page);
-            self.two_megabyte_pages
-                .add_aligned_frames_with_scrap_allocator(
-                    &mut self.four_kilobyte_pages,
-                    end_of_last_gb_page..end_of_last_gb_page,
-                );
-        } else {
-            self.two_megabyte_pages
-                .add_aligned_frames_with_scrap_allocator(
-                    &mut self.four_kilobyte_pages,
-                    memory_region,
-                );
+            if end_of_last_gb_page > first_gb_page {
+                self.two_megabyte_pages
+                    .add_aligned_frames_with_scrap_allocator(
+                        &mut self.four_kilobyte_pages,
+                        memory_region.start..first_gb_page,
+                    );
+                gb_allocator.add_frames(first_gb_page..end_of_last_gb_page);
+                self.two_megabyte_pages
+                    .add_aligned_frames_with_scrap_allocator(
+                        &mut self.four_kilobyte_pages,
+                        end_of_last_gb_page..end_of_last_gb_page,
+                    );
+                return;
+            }
         }
+        self.two_megabyte_pages
+            .add_aligned_frames_with_scrap_allocator(
+                &mut self.four_kilobyte_pages,
+                memory_region.clone(),
+            );
     }
 
     fn initial_page_table_counts(&self) -> &'static [usize] {
@@ -293,6 +347,104 @@ struct SegmentSelectors {
 
 #[repr(C, align(0x1000))]
 struct DoubleFaultStack([u8; DOUBLE_FAULT_STACK_SIZE]);
+
+#[repr(C)]
+struct ElfHeader {
+    ident_magic: u32,
+    ident_width_class: u8,
+    ident_data_endianness: u8,
+    ident_version: u8,
+    ident_os_abi: u8,
+    ident_abi_version: u8,
+    ident_padding_0: u8,
+    ident_padding_1: u8,
+    ident_padding_2: u8,
+    ident_padding_3: u8,
+    ident_padding_4: u8,
+    ident_padding_5: u8,
+    ident_padding_6: u8,
+    file_type: u16,
+    machine: u16,
+    version: u32,
+    entry: u64,
+    program_header_offset: u64,
+    section_header_offset: u64,
+    flags: u32,
+    elf_header_size: u16,
+    program_header_entry_size: u16,
+    program_header_num: u16,
+    section_header_entry_size: u16,
+    section_header_num: u16,
+    shstrndx: u16,
+}
+
+#[allow(clippy::cast_possible_truncation)]
+impl ExecutableHeader for ElfHeader {
+    fn is_valid(&self, file_size: usize) -> bool {
+        size_of::<ElfHeader>() <= file_size
+            && self.ident_magic == ELF_MAGIC_NUMBER
+            && self.ident_width_class == ELF_64_BIT
+            && self.ident_data_endianness == ELF_LITTLE_ENDIAN
+            && self.ident_version == 1
+            && self.file_type == ELF_EXECUTABLE
+            && self.machine == ELF_X86_64
+            && self.program_header_offset as usize
+                + self.program_header_num as usize * size_of::<ProgramHeader>()
+                <= file_size
+    }
+
+    fn num_segments(&self) -> usize {
+        self.program_header_num as usize
+    }
+
+    fn segment_header_table_offset(&self) -> usize {
+        self.program_header_offset as usize
+    }
+}
+
+#[repr(C)]
+struct ProgramHeader {
+    segment_type: u32,
+    flags: u32,
+    offset: u64,
+    virtual_address: u64,
+    physical_address: u64,
+    file_size: u64,
+    memory_size: u64,
+    align: u64,
+}
+
+#[allow(clippy::cast_possible_truncation)]
+impl SegmentHeader for ProgramHeader {
+    fn offset(&self) -> usize {
+        self.offset as usize
+    }
+
+    fn segment_type(&self) -> u32 {
+        self.segment_type
+    }
+
+    fn virtual_address(&self) -> usize {
+        self.virtual_address as usize
+    }
+
+    fn file_size(&self) -> usize {
+        self.file_size as usize
+    }
+}
+
+fn set_entry(
+    page_table: &mut page_table::PageTable,
+    index: usize,
+    address: usize,
+    flags: PageTableFlags,
+) {
+    page_table[index].set_addr(PhysAddr::new_truncate(address as u64), flags);
+}
+
+fn set_last_entry(page_table: &mut page_table::PageTable, address: usize, flags: PageTableFlags) {
+    set_entry(page_table, 0x1fe, address, flags);
+}
 
 fn kernel_stack_flags() -> PageTableFlags {
     PageTableFlags::PRESENT | PageTableFlags::WRITABLE
