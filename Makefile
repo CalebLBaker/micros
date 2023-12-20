@@ -51,3 +51,6 @@ build/arch/$(arch)/%.o: arch/$(arch)/%.asm
 	@mkdir -p $(shell dirname $@)
 	@nasm -felf64 $< -o $@
 
+kernellinecount:
+	cloc micros_kernel_common arch/amd64/micros_kernel_amd64 arch/amd64/boot.asm arch/amd64/long_mode_init.asm --exclude-lang=TOML
+

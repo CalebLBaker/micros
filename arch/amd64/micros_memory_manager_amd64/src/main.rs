@@ -5,9 +5,12 @@
 #![allow(clippy::empty_loop)]
 
 use core::panic::PanicInfo;
+use micros_console_writer::WRITER;
 
 #[no_mangle]
 pub extern "C" fn main() -> ! {
+    WRITER.lock().write_byte(b'h');
+    // let _ = WRITER.lock().write_str("hi");
     loop {}
 }
 

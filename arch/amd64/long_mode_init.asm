@@ -1,7 +1,13 @@
 global long_mode_start
+global launch_memory_manager
+
+USER_DATA_SEGMENT equ 0x23
+USER_CODE_SEGMENT equ 0x2b
 
 section .text
 bits 64
+extern main
+extern halt
 long_mode_start:
     mov rsp, 0
 
@@ -13,6 +19,24 @@ long_mode_start:
     mov fs, ax
     mov gs, ax
 
-    extern main
     call main
+
+; Args:
+; rdi: physical address of root page table for memory manager
+; rsi: virtual address of memory manager main function
+launch_memory_manager:
+	mov cr3, rdi
+	mov rsp, 0
+	mov ax, USER_DATA_SEGMENT
+	mov ds, ax
+	mov es, ax
+	mov fs, ax
+	mov gs, ax
+
+	push USER_DATA_SEGMENT
+	push 0
+	pushf
+	push USER_CODE_SEGMENT
+	push rsi
+	iretq
 
