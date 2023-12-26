@@ -1,5 +1,5 @@
 use core::mem::size_of;
-use micros_kernel_common::{ExecutableHeader, SegmentHeader};
+use micros_kernel_common::{ExecutableHeader, SegmentFlags, SegmentHeader};
 
 #[allow(clippy::module_name_repetitions)]
 #[repr(C)]
@@ -92,6 +92,10 @@ impl SegmentHeader for ProgramHeader {
 
     fn address(&self) -> usize {
         self.virtual_address as usize
+    }
+
+    fn flags(&self) -> SegmentFlags {
+        SegmentFlags(self.flags)
     }
 }
 

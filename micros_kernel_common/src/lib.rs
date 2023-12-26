@@ -35,6 +35,7 @@ pub trait Architecture: Sized {
         address: usize,
         data: &[u8],
         size: usize,
+        flags: SegmentFlags,
     ) -> Option<()>;
 }
 
@@ -54,6 +55,22 @@ pub trait SegmentHeader {
     fn address(&self) -> usize;
     fn file_size(&self) -> usize;
     fn memory_size(&self) -> usize;
+    fn flags(&self) -> SegmentFlags;
+}
+
+#[derive(Clone, Copy)]
+pub struct SegmentFlags(pub u32);
+
+impl SegmentFlags {
+    #[must_use]
+    pub fn writable(self) -> bool {
+        (self.0 & ELF_WRITABLE_SEGMENT) != 0
+    }
+
+    #[must_use]
+    pub fn executable(self) -> bool {
+        (self.0 & ELF_EXECUTABLE_SEGMENT) != 0
+    }
 }
 
 pub enum Error {
@@ -195,6 +212,8 @@ extern "C" {
 }
 
 const ELF_LOADABLE_SEGMENT: u32 = 1;
+const ELF_WRITABLE_SEGMENT: u32 = 2;
+const ELF_EXECUTABLE_SEGMENT: u32 = 1;
 
 unsafe fn load_memory_manager<Proc: Architecture>(
     proc: &mut Proc,
@@ -231,6 +250,7 @@ unsafe fn load_memory_manager<Proc: Architecture>(
                 segment_header.file_size(),
             ),
             segment_header.memory_size(),
+            segment_header.flags(),
         );
     }
 

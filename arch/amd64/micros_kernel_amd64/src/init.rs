@@ -8,7 +8,7 @@ use core::{ops::Range, ptr::addr_of, slice};
 use elf::{ElfHeader, ProgramHeader};
 use micros_kernel_common::{
     boot_os, copy_and_zero_fill, end_of_last_full_page, first_full_page_address,
-    slice_with_bounds_check, Architecture, Error, FrameAllocator, ProcessLaunchInfo,
+    slice_with_bounds_check, Architecture, Error, FrameAllocator, ProcessLaunchInfo, SegmentFlags,
 };
 use x86_64::{
     addr::PhysAddr,
@@ -34,7 +34,7 @@ pub unsafe fn initialize_operating_system(
 ) -> Result<ProcessLaunchInfo, OsError> {
     p1_table_for_stack[0x001].set_addr(
         PhysAddr::new_truncate(addr_of!(DOUBLE_FAULT_STACK) as u64),
-        PageTableFlags::PRESENT | PageTableFlags::WRITABLE,
+        PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::NO_EXECUTE,
     );
 
     let segment_selectors = load_gdt(&mut GDT, &mut TSS);
@@ -140,23 +140,22 @@ impl Amd64 {
         mut address: usize,
         data: &[u8],
         size: usize,
+        flags: SegmentFlags,
     ) -> Option<()> {
         let mut data_offset = 0;
         for entry in page_table_entries(page_table, page_table_level, address, size) {
             let page = if entry.is_unused() {
                 let page_address = self.get_4k_frame()?;
-                entry.set_addr(
-                    PhysAddr::new_truncate(page_address as u64),
-                    user_accessible_page(),
-                );
+                set_page_table_entry(entry, page_address, flags);
                 (page_address as *mut u8).write_bytes(0, FOUR_KILOBYTES);
                 page_address
             } else {
+                update_page_table_entry_flags(entry, flags);
                 entry.addr().as_u64() as usize
             };
             let page_offset = offset_in_page(page_table_level, address);
             let bytes_for_page =
-                (page_size(page_table_level) - page_offset).min(size - data_offset);
+                number_of_bytes_for_page(page_table_level, page_offset, size, data_offset);
             let data_for_entry = slice_with_bounds_check(data, data_offset, bytes_for_page);
 
             if page_table_level == 0 || entry.flags().contains(PageTableFlags::HUGE_PAGE) {
@@ -172,6 +171,7 @@ impl Amd64 {
                     address,
                     data_for_entry,
                     bytes_for_page,
+                    flags,
                 )?;
             }
             data_offset += bytes_for_page;
@@ -198,7 +198,7 @@ impl Architecture for Amd64 {
 
         let p3_table_addr = self.get_4k_frame()?;
         let p3_table = p3_table_addr as *mut PageTable;
-        let flags = user_accessible_page();
+        let flags = user_accessible_page() | PageTableFlags::WRITABLE;
         set_last_entry(root_table, p3_table_addr, flags);
 
         let p2_table_addr = self.get_4k_frame()?;
@@ -209,17 +209,18 @@ impl Architecture for Amd64 {
             clear_and_set_last_entry(
                 &mut *p2_table,
                 huge_stack,
-                flags | PageTableFlags::HUGE_PAGE,
+                flags | PageTableFlags::HUGE_PAGE | PageTableFlags::NO_EXECUTE,
             );
         } else {
+            let stack_flags = flags | PageTableFlags::NO_EXECUTE;
             let p1_table_addr = self.get_4k_frame()?;
             let p1_table = p1_table_addr as *mut PageTable;
             clear_and_set_last_entry(&mut *p2_table, p1_table_addr, flags);
 
-            clear_and_set_last_entry(&mut *p1_table, self.get_4k_frame()?, flags);
-            set_entry(&mut *p1_table, 0x1fd, self.get_4k_frame()?, flags);
-            set_entry(&mut *p1_table, 0x1fc, self.get_4k_frame()?, flags);
-            set_entry(&mut *p1_table, 0x1fb, self.get_4k_frame()?, flags);
+            clear_and_set_last_entry(&mut *p1_table, self.get_4k_frame()?, stack_flags);
+            set_entry(&mut *p1_table, 0x1fd, self.get_4k_frame()?, stack_flags);
+            set_entry(&mut *p1_table, 0x1fc, self.get_4k_frame()?, stack_flags);
+            set_entry(&mut *p1_table, 0x1fb, self.get_4k_frame()?, stack_flags);
         }
 
         Some(root_table_pointer)
@@ -257,8 +258,9 @@ impl Architecture for Amd64 {
         address: usize,
         data: &[u8],
         size: usize,
+        flags: SegmentFlags,
     ) -> Option<()> {
-        self.copy_into_address_space(3, root_page_table, address, data, size)
+        self.copy_into_address_space(3, root_page_table, address, data, size, flags)
     }
 }
 
@@ -290,8 +292,14 @@ fn supports_gigabyte_pages(cpu_info: u32) -> bool {
     (cpu_info & GIGABYTE_PAGES_CPUID_BIT) != 0
 }
 
+fn conditionally_add_flag(flags: &mut PageTableFlags, condition: bool, new_flag: PageTableFlags) {
+    if condition {
+        flags.insert(new_flag);
+    }
+}
+
 fn user_accessible_page() -> PageTableFlags {
-    PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::USER_ACCESSIBLE
+    PageTableFlags::PRESENT | PageTableFlags::USER_ACCESSIBLE
 }
 
 fn set_entry(page_table: &mut PageTable, index: usize, address: usize, flags: PageTableFlags) {
@@ -336,6 +344,50 @@ fn page_table_entries(
         .iter_mut()
         .skip(first_index)
         .take(page_table_entry(page_table_level, base_address + size - 1) + 1 - first_index)
+}
+
+fn number_of_bytes_for_page(
+    page_table_level: u8,
+    page_offset: usize,
+    size: usize,
+    data_offset: usize,
+) -> usize {
+    (page_size(page_table_level) - page_offset).min(size - data_offset)
+}
+
+fn set_page_table_entry(
+    page_table_entry: &mut PageTableEntry,
+    address: usize,
+    segment_flags: SegmentFlags,
+) {
+    let mut page_flags = user_accessible_page();
+    conditionally_add_flag(
+        &mut page_flags,
+        segment_flags.writable(),
+        PageTableFlags::WRITABLE,
+    );
+    conditionally_add_flag(
+        &mut page_flags,
+        !segment_flags.executable(),
+        PageTableFlags::NO_EXECUTE,
+    );
+    page_table_entry.set_addr(PhysAddr::new_truncate(address as u64), page_flags);
+}
+
+fn update_page_table_entry_flags(
+    page_table_entry: &mut PageTableEntry,
+    segment_flags: SegmentFlags,
+) {
+    let mut page_flags = page_table_entry.flags();
+    conditionally_add_flag(
+        &mut page_flags,
+        segment_flags.writable(),
+        PageTableFlags::WRITABLE,
+    );
+    if segment_flags.executable() {
+        page_flags.remove(PageTableFlags::NO_EXECUTE);
+    }
+    page_table_entry.set_flags(page_flags);
 }
 
 const fn page_table_entry(page_table_level: u8, address: usize) -> usize {
