@@ -8,7 +8,7 @@ use core::{ops::Range, ptr::addr_of, slice};
 use elf::{ElfHeader, ProgramHeader};
 use micros_kernel_common::{
     boot_os, copy_and_zero_fill, end_of_last_full_page, first_full_page_address,
-    slice_with_bounds_check, Architecture, Error, FrameAllocator, ProcessLaunchInfo, SegmentFlags,
+    slice_with_bounds_check, Architecture, Error, FrameAllocator, SegmentFlags,
 };
 use x86_64::{
     addr::PhysAddr,
@@ -31,7 +31,7 @@ pub enum OsError {
 pub unsafe fn initialize_operating_system(
     multiboot_info_ptr: u32,
     cpu_info: u32,
-) -> Result<ProcessLaunchInfo, OsError> {
+) -> Result<(), OsError> {
     p1_table_for_stack[0x001].set_addr(
         PhysAddr::new_truncate(addr_of!(DOUBLE_FAULT_STACK) as u64),
         PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::NO_EXECUTE,

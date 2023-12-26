@@ -26,7 +26,7 @@ use x86_64::{
 #[no_mangle]
 pub extern "C" fn main(multiboot_info_ptr: u32, cpu_info: u32) -> ! {
     match unsafe { initialize_operating_system(multiboot_info_ptr, cpu_info) } {
-        Ok(_) => {
+        Ok(()) => {
             let _ = WRITER
                 .lock()
                 .write_str("Function that wasn't supposed to return returned . . . \n");
