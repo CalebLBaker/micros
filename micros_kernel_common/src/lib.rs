@@ -13,7 +13,7 @@ use core::{
 };
 
 use multiboot2::{
-    BootInformation, BootInformationHeader, MbiLoadError, MemoryArea, MemoryAreaType, MemoryMapTag,
+    BootInformation, BootInformationHeader, MemoryArea, MemoryAreaType, MemoryMapTag,
 };
 
 pub trait Architecture: Sized {
@@ -71,15 +71,6 @@ impl SegmentFlags {
     pub fn executable(self) -> bool {
         (self.0 & ELF_EXECUTABLE_SEGMENT) != 0
     }
-}
-
-pub enum Error {
-    MultibootHeaderLoad(MbiLoadError),
-    NoMemoryMap,
-    NoMemoryManager,
-    AssertionError,
-    InvalidMemoryManagerModule,
-    FailedToSetupMemoryManagerAddressSpace,
 }
 
 pub struct FrameAllocator<const FRAME_SIZE: usize> {
@@ -145,18 +136,17 @@ pub struct ProcessLaunchInfo {
 pub unsafe fn boot_os<Proc: Architecture>(
     proc: &mut Proc,
     multiboot_info_ptr: u32,
-) -> Result<ProcessLaunchInfo, Error> {
+) -> Option<ProcessLaunchInfo> {
     // Initialize available memory and set up page tables
-    let boot_info = BootInformation::load(multiboot_info_ptr as *const BootInformationHeader)
-        .map_err(Error::MultibootHeaderLoad)?;
+    let boot_info =
+        BootInformation::load(multiboot_info_ptr as *const BootInformationHeader).ok()?;
 
-    boot_info.memory_map_tag().ok_or(Error::NoMemoryMap)?;
-    let memory_map_tag = boot_info.memory_map_tag().ok_or(Error::NoMemoryMap)?;
+    boot_info.memory_map_tag()?;
+    let memory_map_tag = boot_info.memory_map_tag()?;
     let mut physical_memory_size = 0;
 
     // Add free frames from first 4 GB to available frame list
-    let memory_manager_bounds =
-        memory_manager_executable(&boot_info).ok_or(Error::NoMemoryManager)?;
+    let memory_manager_bounds = memory_manager_executable(&boot_info)?;
 
     let mut memory_regions_in_use = [
         addr_of!(header_start) as usize..addr_of!(kernel_end) as usize,
@@ -166,8 +156,7 @@ pub unsafe fn boot_os<Proc: Architecture>(
     let available_memory_regions = unused_memory_regions(
         &mut memory_regions_in_use,
         Proc::INITIAL_VIRTUAL_MEMORY_SIZE,
-    )
-    .ok_or(Error::AssertionError)?;
+    )?;
     for memory_area in available_memory_areas(memory_map_tag).take(2) {
         physical_memory_size = max(physical_memory_size, memory_area_end(memory_area));
         for memory_region in
@@ -218,15 +207,13 @@ const ELF_EXECUTABLE_SEGMENT: u32 = 1;
 unsafe fn load_memory_manager<Proc: Architecture>(
     proc: &mut Proc,
     exectuable_location: Range<usize>,
-) -> Result<ProcessLaunchInfo, Error> {
-    let memory_manager_root_page_table = proc
-        .initialize_memory_manager_page_tables()
-        .ok_or(Error::FailedToSetupMemoryManagerAddressSpace)?;
+) -> Option<ProcessLaunchInfo> {
+    let memory_manager_root_page_table = proc.initialize_memory_manager_page_tables()?;
 
     let memory_manager_elf_header = &*(exectuable_location.start as *const Proc::ExecutableHeader);
 
     if !memory_manager_elf_header.is_valid(exectuable_location.len()) {
-        return Err(Error::InvalidMemoryManagerModule);
+        return None;
     }
 
     for segment_header in slice::from_raw_parts(
@@ -240,7 +227,7 @@ unsafe fn load_memory_manager<Proc: Architecture>(
         if segment_header.offset() + segment_header.file_size() > exectuable_location.len()
             || segment_header.file_size() > segment_header.memory_size()
         {
-            return Err(Error::InvalidMemoryManagerModule);
+            return None;
         }
         proc.copy_into_address_space(
             &mut *memory_manager_root_page_table,
@@ -254,7 +241,7 @@ unsafe fn load_memory_manager<Proc: Architecture>(
         );
     }
 
-    Ok(ProcessLaunchInfo {
+    Some(ProcessLaunchInfo {
         root_page_table_address: memory_manager_root_page_table as usize,
         entry_point: memory_manager_elf_header.entry(),
     })

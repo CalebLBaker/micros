@@ -8,7 +8,7 @@ use core::{ops::Range, ptr::addr_of, slice};
 use elf::{ElfHeader, ProgramHeader};
 use micros_kernel_common::{
     boot_os, copy_and_zero_fill, end_of_last_full_page, first_full_page_address,
-    slice_with_bounds_check, Architecture, Error, FrameAllocator, SegmentFlags,
+    slice_with_bounds_check, Architecture, FrameAllocator, SegmentFlags,
 };
 use x86_64::{
     addr::PhysAddr,
@@ -23,15 +23,7 @@ use x86_64::{
     VirtAddr,
 };
 
-pub enum OsError {
-    Apic(&'static str),
-    Generic(Error),
-}
-
-pub unsafe fn initialize_operating_system(
-    multiboot_info_ptr: u32,
-    cpu_info: u32,
-) -> Result<(), OsError> {
+pub unsafe fn initialize_operating_system(multiboot_info_ptr: u32, cpu_info: u32) -> Option<()> {
     p1_table_for_stack[0x001].set_addr(
         PhysAddr::new_truncate(addr_of!(DOUBLE_FAULT_STACK) as u64),
         PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::NO_EXECUTE,
@@ -46,7 +38,7 @@ pub unsafe fn initialize_operating_system(
     IDT.page_fault.set_handler_fn(page_fault_handler);
     set_interrupt_handlers(&mut IDT);
     IDT.load();
-    apic::init().map_err(OsError::Apic)?;
+    apic::init()?;
     interrupts::enable();
 
     // Without this line the double fault handler triggers a page fault and I have no idea why
@@ -72,8 +64,7 @@ pub unsafe fn initialize_operating_system(
             }
         },
         multiboot_info_ptr,
-    )
-    .map_err(OsError::Generic)?;
+    )?;
 
     launch_memory_manager(
         memory_manager_launch_info.root_page_table_address,

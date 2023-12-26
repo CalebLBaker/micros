@@ -3,12 +3,6 @@ MULTIBOOT_2   equ 0xe85250d6 ; 'magic number' lets bootloader find the header
 X86           equ 0          ; architecture enum value for x86
 HEADER_LENGTH equ header_end - header_start
 
-; Declare contants used in printing
-VGA_BUFFER    equ 0xb8000
-ER            equ 0x4f524f45
-R_COLON       equ 0x4f3a4f52
-SPACE         equ 0x4f204f20
-
 ; Miscelaneous constants
 MULTIBOOT_CHECK       equ 0x36d76289
 CPUID_BIT             equ 0x200000
@@ -28,11 +22,6 @@ PAGING_FLAG           equ 0x80000000
 LONG_CODE_SEGMENT     equ 0x20980000000000
 MODULE_ALIGNMENT_TAG  equ 6
 MULTIBOOT_END_TAG     equ 0
-
-; Error codes
-NO_MULTIBOOT equ "0"
-NO_CPUID     equ "1"
-NO_LONG_MODE equ "2"
 
 ; Declare a multiboot header that marks the program as a kernel.
 ; Format is documented in the multiboot standard
@@ -101,7 +90,7 @@ _start:
 
     ; Make sure the kernel was loaded by a multiboot compliant bootloader
     cmp eax, MULTIBOOT_CHECK
-    jne .no_multiboot
+    jne stop
 
     ; Make sure cpuid is supported
     pushfd
@@ -115,7 +104,7 @@ _start:
     push ecx
     popfd
     cmp eax, ecx
-    je .no_cpuid
+    je stop
 
     ; Stash ebx to edi before calling cpuid
     mov edi, ebx
@@ -124,11 +113,11 @@ _start:
     mov eax, 0x80000000
     cpuid
     cmp eax, 0x80000001
-    jb .no_long_mode
+    jb stop
     mov eax, 0x80000001
     cpuid
     test edx, LONG_MODE_CPUID_BIT
-    jz .no_long_mode
+    jz stop
 
     ; Save cpuid result into esi so it can be passed into main
     mov esi, edx
@@ -227,26 +216,6 @@ _start:
     jne .map_p2_table
 
     jmp .done_mapping_low_page_tables
-
-.no_multiboot:
-    mov al, NO_MULTIBOOT
-    jmp error
-
-.no_cpuid:
-    mov al, NO_CPUID
-    jmp error
-
-.no_long_mode:
-    mov al, NO_LONG_MODE
-    jmp error
-
-; Handle errors by printing an error code
-error:
-    mov dword [VGA_BUFFER], ER
-    mov dword [VGA_BUFFER + 4], R_COLON
-    mov dword [VGA_BUFFER + 8], SPACE
-    mov byte  [VGA_BUFFER + 10], al
-    hlt
 
 stop:
     hlt
