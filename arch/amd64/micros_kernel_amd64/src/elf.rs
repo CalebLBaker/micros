@@ -89,6 +89,10 @@ impl SegmentHeader for ProgramHeader {
     fn memory_size(&self) -> usize {
         self.memory_size as usize
     }
+
+    fn address(&self) -> usize {
+        self.virtual_address as usize
+    }
 }
 
 const ELF_MAGIC_NUMBER: u32 = 0x464c_457f;

@@ -51,6 +51,7 @@ pub trait ExecutableHeader {
 pub trait SegmentHeader {
     fn segment_type(&self) -> u32;
     fn offset(&self) -> usize;
+    fn address(&self) -> usize;
     fn file_size(&self) -> usize;
     fn memory_size(&self) -> usize;
 }
@@ -224,7 +225,7 @@ unsafe fn load_memory_manager<Proc: Architecture>(
         }
         proc.copy_into_address_space(
             &mut *memory_manager_root_page_table,
-            segment_header.memory_size(),
+            segment_header.address(),
             slice::from_raw_parts(
                 (exectuable_location.start + segment_header.offset()) as *const u8,
                 segment_header.file_size(),

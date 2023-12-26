@@ -4,9 +4,8 @@ use crate::{
     spurious_interrupt_handler, timer_interrupt_handler,
 };
 use apic::InterruptIndex;
-use core::{fmt::Write, ops::Range, ptr::addr_of, slice};
+use core::{ops::Range, ptr::addr_of, slice};
 use elf::{ElfHeader, ProgramHeader};
-use micros_console_writer::WRITER;
 use micros_kernel_common::{
     boot_os, copy_and_zero_fill, end_of_last_full_page, first_full_page_address,
     slice_with_bounds_check, Architecture, Error, FrameAllocator, ProcessLaunchInfo,
@@ -75,10 +74,6 @@ pub unsafe fn initialize_operating_system(
         multiboot_info_ptr,
     )
     .map_err(OsError::Generic)?;
-
-    let _ = WRITER
-        .lock()
-        .write_str("Everything seems to be working . . . \n");
 
     launch_memory_manager(
         memory_manager_launch_info.root_page_table_address,
@@ -154,6 +149,7 @@ impl Amd64 {
                     PhysAddr::new_truncate(page_address as u64),
                     user_accessible_page(),
                 );
+                (page_address as *mut u8).write_bytes(0, FOUR_KILOBYTES);
                 page_address
             } else {
                 entry.addr().as_u64() as usize
@@ -170,7 +166,6 @@ impl Amd64 {
                 );
             } else {
                 let sub_page_table = &mut *(page as *mut PageTable);
-                sub_page_table.zero();
                 self.copy_into_address_space(
                     page_table_level - 1,
                     sub_page_table,
@@ -198,19 +193,24 @@ impl Architecture for Amd64 {
     unsafe fn initialize_memory_manager_page_tables(&mut self) -> Option<*mut Self::PageTable> {
         let root_table_pointer = self.get_4k_frame()? as *mut PageTable;
         let root_table = &mut (*root_table_pointer);
+        root_table.zero();
         root_table[0] = (*addr_of!(p4_table))[0].clone();
 
         let p3_table_addr = self.get_4k_frame()?;
         let p3_table = p3_table_addr as *mut PageTable;
         let flags = user_accessible_page();
-        clear_and_set_last_entry(root_table, p3_table_addr, flags);
+        set_last_entry(root_table, p3_table_addr, flags);
 
         let p2_table_addr = self.get_4k_frame()?;
         let p2_table = p2_table_addr as *mut PageTable;
         clear_and_set_last_entry(&mut *p3_table, p2_table_addr, flags);
 
         if let Some(huge_stack) = self.get_2mb_frame() {
-            clear_and_set_last_entry(&mut *p2_table, huge_stack, user_accessible_page());
+            clear_and_set_last_entry(
+                &mut *p2_table,
+                huge_stack,
+                flags | PageTableFlags::HUGE_PAGE,
+            );
         } else {
             let p1_table_addr = self.get_4k_frame()?;
             let p1_table = p1_table_addr as *mut PageTable;
@@ -300,7 +300,11 @@ fn set_entry(page_table: &mut PageTable, index: usize, address: usize, flags: Pa
 
 fn clear_and_set_last_entry(page_table: &mut PageTable, address: usize, flags: PageTableFlags) {
     page_table.zero();
-    set_entry(page_table, 0x1fe, address, flags);
+    set_last_entry(page_table, address, flags);
+}
+
+fn set_last_entry(page_table: &mut PageTable, address: usize, flags: PageTableFlags) {
+    set_entry(page_table, 0x1ff, address, flags);
 }
 
 fn set_interrupt_handlers(idt: &mut InterruptDescriptorTable) {
@@ -311,7 +315,7 @@ fn set_interrupt_handlers(idt: &mut InterruptDescriptorTable) {
 
 const fn page_size(page_table_level: u8) -> usize {
     if page_table_level == 0 {
-        0x1000
+        FOUR_KILOBYTES
     } else {
         page_size(page_table_level - 1) << 9
     }
