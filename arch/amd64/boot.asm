@@ -6,6 +6,7 @@ HEADER_LENGTH equ header_end - header_start
 ; Miscelaneous constants
 MULTIBOOT_CHECK       equ 0x36d76289
 CPUID_BIT             equ 0x200000
+CLEAR_IO_PRIVELEGE_LEVEL equ 0xffffcfff
 GIGABYTE_PAGES_CPUID_BIT equ 0x4000000
 LONG_MODE_CPUID_BIT   equ 0x20000000
 PAGE_SIZE             equ 0x1000
@@ -97,6 +98,7 @@ _start:
     pop eax
     mov ecx, eax
     xor eax, CPUID_BIT
+	and eax, CLEAR_IO_PRIVELEGE_LEVEL
     push eax
     popfd
     pushfd

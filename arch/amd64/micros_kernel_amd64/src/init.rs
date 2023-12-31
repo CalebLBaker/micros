@@ -92,6 +92,8 @@ const DOUBLE_FAULT_STACK_SIZE: usize = FOUR_KILOBYTES;
 const DOUBLE_FAULT_STACK_BOTTOM: *mut u8 = 0xffff_ffff_ffe0_1000 as *mut u8;
 const DOUBLE_FAULT_STACK_TOP: VirtAddr = VirtAddr::new_truncate(0xffff_ffff_ffe0_2000);
 
+const INTERRUPT_STACK_BOTTOM: VirtAddr = VirtAddr::new_truncate(0xffff_ffff_fff0_1000);
+
 struct Amd64 {
     four_kilobyte_pages: FrameAllocator<FOUR_KILOBYTES>,
     two_megabyte_pages: FrameAllocator<TWO_MEGABYTES>,
@@ -214,6 +216,21 @@ impl Architecture for Amd64 {
             set_entry(&mut *p1_table, 0x1fb, self.get_4k_frame()?, stack_flags);
         }
 
+        let p1_table_addr = self.get_4k_frame()?;
+        let p1_table = p1_table_addr as *mut PageTable;
+        set_entry(
+            &mut *p2_table,
+            0x100,
+            p1_table_addr,
+            interrupt_stack_flags(),
+        );
+
+        set_last_entry(
+            &mut *p1_table,
+            self.get_4k_frame()?,
+            interrupt_stack_flags(),
+        );
+
         Some(root_table_pointer)
     }
 
@@ -268,6 +285,7 @@ fn load_gdt(
     tss: &'static mut TaskStateSegment,
 ) -> SegmentSelectors {
     tss.interrupt_stack_table[DOUBLE_FAULT_IST_INDEX as usize] = DOUBLE_FAULT_STACK_TOP;
+    tss.privilege_stack_table[0] = INTERRUPT_STACK_BOTTOM;
     let code_selector = gdt.add_entry(Descriptor::kernel_code_segment());
     let tss_selector = gdt.add_entry(Descriptor::tss_segment(tss));
     gdt.add_entry(Descriptor::user_data_segment());
@@ -291,6 +309,10 @@ fn conditionally_add_flag(flags: &mut PageTableFlags, condition: bool, new_flag:
 
 fn user_accessible_page() -> PageTableFlags {
     PageTableFlags::PRESENT | PageTableFlags::USER_ACCESSIBLE
+}
+
+fn interrupt_stack_flags() -> PageTableFlags {
+    PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::NO_EXECUTE
 }
 
 fn set_entry(page_table: &mut PageTable, index: usize, address: usize, flags: PageTableFlags) {

@@ -15,5 +15,6 @@ pub extern "C" fn main() -> ! {
 
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
+    let _ = WRITER.lock().write_str("We're panicing!");
     loop {}
 }
