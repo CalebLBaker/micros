@@ -1,10 +1,10 @@
 [workspace]
 
 members = [
-	"arch/amd64/micros_kernel_amd64",
-	"arch/amd64/micros_console_writer",
-	"micros_kernel_common",
-	"arch/amd64/micros_memory_manager_amd64",
+	"src/micros_kernel_amd64",
+	"src/micros_console_writer",
+	"src/micros_kernel_common",
+	"src/micros_memory_manager_amd64",
 ]
 resolver = "2"
 

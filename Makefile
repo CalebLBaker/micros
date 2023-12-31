@@ -4,10 +4,10 @@ target ?= x86_64-unknown-none
 image := build/micros-$(arch).elf
 iso := build/micros-$(arch).iso
 
-linker_script := micros_kernel_common/linker.ld
-grub_cfg := grub.cfg
-assembly_source_files := $(wildcard arch/$(arch)/*.asm)
-assembly_object_files := $(patsubst arch/$(arch)/%.asm, build/arch/$(arch)/%.o, $(assembly_source_files))
+linker_script := src/micros_kernel_amd64/linker.ld
+grub_cfg := src/grub.cfg
+assembly_source_files := $(wildcard src/*.asm)
+assembly_object_files := $(patsubst src/%.asm, build/src/%.o, $(assembly_source_files))
 kernel := target/$(target)/$(config)/libmicros_kernel_amd64.a
 
 .PHONY: all clean run iso rust_build
@@ -27,7 +27,7 @@ check: $(image)
 	@cargo audit
 
 rust_build:
-	@cargo build --target arch/$(arch)/$(target).json --release
+	@cargo build --target src/$(target).json --release
 
 iso: $(iso)
 
@@ -47,10 +47,10 @@ $(iso): $(image) $(grub_cfg) LICENSE build/third-party-licenses.html rust_build
 $(image): $(assembly_object_files) $(linker_script) rust_build
 	@ld.lld -n -s -T $(linker_script) -o $(image) $(assembly_object_files) $(kernel)
 
-build/arch/$(arch)/%.o: arch/$(arch)/%.asm
+build/src/%.o: src/%.asm
 	@mkdir -p $(shell dirname $@)
 	@nasm -felf64 $< -o $@
 
 kernellinecount:
-	cloc micros_kernel_common arch/amd64/micros_kernel_amd64 arch/amd64/boot.asm arch/amd64/long_mode_init.asm --exclude-lang=TOML
+	cloc src/micros_kernel_common src/micros_kernel_amd64 src/boot.asm src/long_mode_init.asm --exclude-lang=TOML
 
