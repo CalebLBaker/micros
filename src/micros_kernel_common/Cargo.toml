@@ -6,4 +6,5 @@ license = "BSL-1.0"
 edition = "2021"
 
 [dependencies]
-multiboot2 = { version = "0.19.0", default-features = false }
+micros_console_writer = { path = "../micros_console_writer" }
+

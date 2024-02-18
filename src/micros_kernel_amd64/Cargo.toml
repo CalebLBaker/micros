@@ -10,7 +10,6 @@ crate-type = ["staticlib"]
 
 [dependencies]
 micros_kernel_common = { path = "../micros_kernel_common" }
-multiboot2 = { version = "0.19.0", default-features = false }
 x86_64 = "0.14.11"
 x2apic = "0.4.3"
 spin = "0.9.8"
