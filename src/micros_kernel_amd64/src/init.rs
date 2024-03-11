@@ -4,7 +4,11 @@ use crate::{
     spurious_interrupt_handler, timer_interrupt_handler,
 };
 use apic::InterruptIndex;
-use core::{ops::Range, ptr::addr_of, slice};
+use core::{
+    ops::Range,
+    ptr::{addr_of, addr_of_mut},
+    slice,
+};
 use elf::{ElfHeader, ProgramHeader};
 use micros_kernel_common::{
     boot_os, copy_and_zero_fill, end_of_last_full_page, first_full_page_address,
@@ -29,14 +33,14 @@ pub unsafe fn initialize_operating_system(multiboot_info_ptr: u32, cpu_info: u32
         PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::NO_EXECUTE,
     );
 
-    let segment_selectors = load_gdt(&mut GDT, &mut TSS);
+    let segment_selectors = load_gdt(&mut *addr_of_mut!(GDT), &mut *addr_of_mut!(TSS));
     CS::set_reg(segment_selectors.code_selector);
     load_tss(segment_selectors.tss_selector);
     IDT.breakpoint.set_handler_fn(breakpoint_handler);
     let double_fault_interrupt = IDT.double_fault.set_handler_fn(double_fault_handler);
     double_fault_interrupt.set_stack_index(DOUBLE_FAULT_IST_INDEX);
     IDT.page_fault.set_handler_fn(page_fault_handler);
-    set_interrupt_handlers(&mut IDT);
+    set_interrupt_handlers(&mut *addr_of_mut!(IDT));
     IDT.load();
     apic::init()?;
     interrupts::enable();
