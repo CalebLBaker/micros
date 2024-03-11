@@ -5,6 +5,3 @@ authors = ["CalebLBaker <calebbaker774@gmail.com>"]
 license = "BSL-1.0"
 edition = "2021"
 
-[dependencies]
-micros_console_writer = { path = "../micros_console_writer" }
-

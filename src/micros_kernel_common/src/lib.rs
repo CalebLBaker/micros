@@ -142,14 +142,10 @@ pub unsafe fn boot_os<Proc: Architecture>(
     let boot_info_size = (*(multiboot_info_ptr as *const BootInformationHeader)).total_size as usize;
     let boot_info = BootInformation { tags: slice::from_raw_parts(multiboot_info_ptr as *const u8, boot_info_size).split_at_unchecked(size_of::<BootInformationHeader>()).1 };
 
-    micros_console_writer::WRITER.lock().write_str("parsed boot info size\n");
-
     let mut physical_memory_size = 0;
 
     // Add free frames from first 4 GB to available frame list
     let memory_manager_bounds = memory_manager_executable(boot_info)?;
-
-    micros_console_writer::WRITER.lock().write_str("found memory manager executable\n");
 
     let mut memory_regions_in_use = [
         addr_of!(header_start) as usize..addr_of!(kernel_end) as usize,
@@ -160,18 +156,15 @@ pub unsafe fn boot_os<Proc: Architecture>(
         &mut memory_regions_in_use,
         Proc::INITIAL_VIRTUAL_MEMORY_SIZE,
     )?;
-    micros_console_writer::WRITER.lock().write_str("found unused memory regions\n");
+
     for memory_area in available_memory_areas(boot_info.tags_of_type::<MemoryMapTag>().next()?) {
-        writeln!(micros_console_writer::WRITER.lock(), "hi");
         physical_memory_size = max(physical_memory_size, memory_area_end(memory_area));
-        writeln!(micros_console_writer::WRITER.lock(), "memory area: {:?}", memory_area);
         for memory_region in
             unused_memory_regions_from_area(memory_area, available_memory_regions.clone())
         {
             proc.register_memory_region(memory_region);
         }
     }
-    micros_console_writer::WRITER.lock().write_str("registered memory regions\n");
 
     load_memory_manager(proc, memory_manager_bounds)
 }
@@ -225,14 +218,12 @@ struct BootInformationHeader {
 }
 
 #[repr(C, align(8))]
-#[derive(Debug)]
 struct BootInfoTagHeader {
     tag_type: u32,
     size: u32,
 }
 
 #[repr(C)]
-#[derive(Debug)]
 struct MemoryMapEntry {
     base_addr: u64,
     length: u64,
@@ -263,7 +254,7 @@ impl<'a> TryFrom<&'a [u8]> for MemoryMapTag<'a> {
         else {
             let pointer = value.as_ptr();
             let header = unsafe { &*aligned_pointer_cast::<MemoryMapHeader>(pointer).ok_or(())? };
-            if header.entry_size as usize != size_of::<MemoryMapHeader>() || header.entry_version != 0 {
+            if header.entry_size as usize != size_of::<MemoryMapEntry>() || header.entry_version != 0 {
                 Err(())
             }
             else {
@@ -358,7 +349,6 @@ impl<'a> Iterator for MultibootTagIterator<'a> {
     type Item = BootInfoTag<'a>;
     fn next(&mut self) -> Option<Self::Item> {
         if self.tags.len() < size_of::<BootInfoTagHeader>() {
-            writeln!(micros_console_writer::WRITER.lock(), "tags too small; size: {}", self.tags.len());
             None
         }
         else {
@@ -367,13 +357,11 @@ impl<'a> Iterator for MultibootTagIterator<'a> {
             let tag_header = unsafe { &*(pointer.add(padding_size) as *const BootInfoTagHeader) };
             let tag_size = tag_header.size as usize;
             if self.tags.len() < tag_size + padding_size {
-                writeln!(micros_console_writer::WRITER.lock(), "tag overflow; header: {:?}, remaining data: {}, padding: {}", tag_header, self.tags.len(), padding_size);
                 None
             }
             else {
                 let (tag_data, remaining_data) = self.tags.split_at(padding_size).1.split_at(tag_size);
                 self.tags = remaining_data;
-                writeln!(micros_console_writer::WRITER.lock(), "tag: header: {:?}, address: {:?}", tag_header, self.tags.as_ptr());
                 Some(Self::Item {
                     tag_type: tag_header.tag_type,
                     data: tag_data,
@@ -386,11 +374,9 @@ impl<'a> Iterator for MultibootTagIterator<'a> {
 fn aligned_pointer_cast<T>(pointer: *const u8) -> Option<*const T> {
     let new_pointer = pointer.cast::<T>();
     if new_pointer.is_aligned() {
-        micros_console_writer::WRITER.lock().write_str("successful aligned cast\n");
         Some(new_pointer)
     }
     else {
-        micros_console_writer::WRITER.lock().write_str("misaligned pointer\n");
         None
     }
 }
@@ -486,9 +472,7 @@ fn unused_memory_regions(
 }
 
 fn available_memory_areas(memory_map: MemoryMapTag) -> impl Iterator<Item = &MemoryMapEntry> {
-    micros_console_writer::WRITER.lock().write_str("hi\n");
     memory_map.entries.iter().filter(|area| {
-        micros_console_writer::WRITER.lock().write_str("hello\n");
         area.region_type == AVAILABLE_MEMORY || area.region_type == ACPI_MEMORY
     })
 }
