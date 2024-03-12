@@ -4,6 +4,7 @@
 #![deny(clippy::pedantic)]
 #![allow(clippy::struct_field_names)]
 
+mod amd64_frame_allocator;
 mod apic;
 mod elf;
 mod init;

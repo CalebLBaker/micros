@@ -1,4 +1,5 @@
 use crate::{
+    amd64_frame_allocator::{Amd64FrameAllocator, FOUR_KILOBYTES, GIGABYTE},
     apic, breakpoint_handler, double_fault_handler, elf, error_interrupt_handler,
     launch_memory_manager, p1_table_for_stack, p2_tables, p4_table, page_fault_handler,
     spurious_interrupt_handler, timer_interrupt_handler,
@@ -12,7 +13,7 @@ use core::{
 use elf::{ElfHeader, ProgramHeader};
 use micros_kernel_common::{
     boot_os, copy_and_zero_fill, end_of_last_full_page, first_full_page_address,
-    slice_with_bounds_check, Architecture, FrameAllocator, SegmentFlags,
+    slice_with_bounds_check, Architecture, FfiOption, FrameAllocator, SegmentFlags,
 };
 use x86_64::{
     addr::PhysAddr,
@@ -51,21 +52,23 @@ pub unsafe fn initialize_operating_system(multiboot_info_ptr: u32, cpu_info: u32
     DOUBLE_FAULT_STACK_BOTTOM.write_volatile(0xff);
 
     let memory_manager_launch_info = boot_os(
-        &mut if supports_gigabyte_pages(cpu_info) {
-            let mut four_kilobyte_pages = FrameAllocator::default();
-            four_kilobyte_pages.add_frame(addr_of!(p2_tables[0]) as usize);
-            four_kilobyte_pages.add_frame(addr_of!(p2_tables[1]) as usize);
-            Amd64 {
-                four_kilobyte_pages,
-                two_megabyte_pages: FrameAllocator::default(),
-                gigabyte_pages: Some(FrameAllocator::default()),
-            }
-        } else {
-            Amd64 {
-                four_kilobyte_pages: FrameAllocator::default(),
-                two_megabyte_pages: FrameAllocator::default(),
-                gigabyte_pages: None,
-            }
+        &mut Amd64 {
+            allocator: if supports_gigabyte_pages(cpu_info) {
+                let mut four_kilobyte_pages = FrameAllocator::default();
+                four_kilobyte_pages.add_frame(addr_of!(p2_tables[0]) as usize);
+                four_kilobyte_pages.add_frame(addr_of!(p2_tables[1]) as usize);
+                Amd64FrameAllocator {
+                    four_kilobyte_pages,
+                    two_megabyte_pages: FrameAllocator::default(),
+                    gigabyte_pages: FfiOption::Some(FrameAllocator::default()),
+                }
+            } else {
+                Amd64FrameAllocator {
+                    four_kilobyte_pages: FrameAllocator::default(),
+                    two_megabyte_pages: FrameAllocator::default(),
+                    gigabyte_pages: FfiOption::None,
+                }
+            },
         },
         multiboot_info_ptr,
     )?;
@@ -75,10 +78,6 @@ pub unsafe fn initialize_operating_system(multiboot_info_ptr: u32, cpu_info: u32
         memory_manager_launch_info.entry_point,
     );
 }
-
-const FOUR_KILOBYTES: usize = 0x1000;
-const TWO_MEGABYTES: usize = 0x20_0000;
-const GIGABYTE: usize = 0x4000_0000;
 
 static mut IDT: InterruptDescriptorTable = InterruptDescriptorTable::new();
 
@@ -99,36 +98,10 @@ const DOUBLE_FAULT_STACK_TOP: VirtAddr = VirtAddr::new_truncate(0xffff_ffff_ffe0
 const INTERRUPT_STACK_BOTTOM: VirtAddr = VirtAddr::new_truncate(0xffff_ffff_fff0_1000);
 
 struct Amd64 {
-    four_kilobyte_pages: FrameAllocator<FOUR_KILOBYTES>,
-    two_megabyte_pages: FrameAllocator<TWO_MEGABYTES>,
-    gigabyte_pages: Option<FrameAllocator<GIGABYTE>>,
+    allocator: Amd64FrameAllocator,
 }
 
 impl Amd64 {
-    unsafe fn get_4k_frame(&mut self) -> Option<usize> {
-        if let Some(frame) = self.four_kilobyte_pages.get_frame() {
-            Some(frame)
-        } else if let Some(frame) = self.get_2mb_frame() {
-            self.four_kilobyte_pages
-                .add_frames((frame + FOUR_KILOBYTES)..(frame + TWO_MEGABYTES));
-            Some(frame)
-        } else {
-            None
-        }
-    }
-
-    unsafe fn get_2mb_frame(&mut self) -> Option<usize> {
-        if let Some(frame) = self.two_megabyte_pages.get_frame() {
-            Some(frame)
-        } else if let Some(frame) = self.gigabyte_pages.as_mut()?.get_frame() {
-            self.two_megabyte_pages
-                .add_frames((frame + TWO_MEGABYTES)..(frame + GIGABYTE));
-            Some(frame)
-        } else {
-            None
-        }
-    }
-
     #[allow(clippy::cast_possible_truncation)]
     unsafe fn copy_into_address_space(
         &mut self,
@@ -142,7 +115,7 @@ impl Amd64 {
         let mut data_offset = 0;
         for entry in page_table_entries(page_table, page_table_level, address, size) {
             let page = if entry.is_unused() {
-                let page_address = self.get_4k_frame()?;
+                let page_address = self.allocator.get_4k_frame()?;
                 set_page_table_entry(entry, page_address, flags);
                 (page_address as *mut u8).write_bytes(0, FOUR_KILOBYTES);
                 page_address
@@ -188,21 +161,21 @@ impl Architecture for Amd64 {
     type SegmentHeader = ProgramHeader;
 
     unsafe fn initialize_memory_manager_page_tables(&mut self) -> Option<*mut Self::PageTable> {
-        let root_table_pointer = self.get_4k_frame()? as *mut PageTable;
+        let root_table_pointer = self.allocator.get_4k_frame()? as *mut PageTable;
         let root_table = &mut (*root_table_pointer);
         root_table.zero();
         root_table[0] = (*addr_of!(p4_table))[0].clone();
 
-        let p3_table_addr = self.get_4k_frame()?;
+        let p3_table_addr = self.allocator.get_4k_frame()?;
         let p3_table = p3_table_addr as *mut PageTable;
         let flags = user_accessible_page() | PageTableFlags::WRITABLE;
         set_last_entry(root_table, p3_table_addr, flags);
 
-        let p2_table_addr = self.get_4k_frame()?;
+        let p2_table_addr = self.allocator.get_4k_frame()?;
         let p2_table = p2_table_addr as *mut PageTable;
         clear_and_set_last_entry(&mut *p3_table, p2_table_addr, flags);
 
-        if let Some(huge_stack) = self.get_2mb_frame() {
+        if let Some(huge_stack) = self.allocator.get_2mb_frame() {
             clear_and_set_last_entry(
                 &mut *p2_table,
                 huge_stack,
@@ -210,17 +183,32 @@ impl Architecture for Amd64 {
             );
         } else {
             let stack_flags = flags | PageTableFlags::NO_EXECUTE;
-            let p1_table_addr = self.get_4k_frame()?;
+            let p1_table_addr = self.allocator.get_4k_frame()?;
             let p1_table = p1_table_addr as *mut PageTable;
             clear_and_set_last_entry(&mut *p2_table, p1_table_addr, flags);
 
-            clear_and_set_last_entry(&mut *p1_table, self.get_4k_frame()?, stack_flags);
-            set_entry(&mut *p1_table, 0x1fd, self.get_4k_frame()?, stack_flags);
-            set_entry(&mut *p1_table, 0x1fc, self.get_4k_frame()?, stack_flags);
-            set_entry(&mut *p1_table, 0x1fb, self.get_4k_frame()?, stack_flags);
+            clear_and_set_last_entry(&mut *p1_table, self.allocator.get_4k_frame()?, stack_flags);
+            set_entry(
+                &mut *p1_table,
+                0x1fd,
+                self.allocator.get_4k_frame()?,
+                stack_flags,
+            );
+            set_entry(
+                &mut *p1_table,
+                0x1fc,
+                self.allocator.get_4k_frame()?,
+                stack_flags,
+            );
+            set_entry(
+                &mut *p1_table,
+                0x1fb,
+                self.allocator.get_4k_frame()?,
+                stack_flags,
+            );
         }
 
-        let p1_table_addr = self.get_4k_frame()?;
+        let p1_table_addr = self.allocator.get_4k_frame()?;
         let p1_table = p1_table_addr as *mut PageTable;
         set_entry(
             &mut *p2_table,
@@ -231,7 +219,7 @@ impl Architecture for Amd64 {
 
         set_last_entry(
             &mut *p1_table,
-            self.get_4k_frame()?,
+            self.allocator.get_4k_frame()?,
             interrupt_stack_flags(),
         );
 
@@ -239,27 +227,30 @@ impl Architecture for Amd64 {
     }
 
     unsafe fn register_memory_region(&mut self, memory_region: Range<usize>) {
-        if let Some(ref mut gb_allocator) = self.gigabyte_pages {
+        if let FfiOption::Some(ref mut gb_allocator) = self.allocator.gigabyte_pages {
             let first_gb_page = first_full_page_address(memory_region.start, GIGABYTE);
             let end_of_last_gb_page = end_of_last_full_page(memory_region.end, GIGABYTE);
             if end_of_last_gb_page > first_gb_page {
-                self.two_megabyte_pages
+                self.allocator
+                    .two_megabyte_pages
                     .add_aligned_frames_with_scrap_allocator(
-                        &mut self.four_kilobyte_pages,
+                        &mut self.allocator.four_kilobyte_pages,
                         memory_region.start..first_gb_page,
                     );
                 gb_allocator.add_frames(first_gb_page..end_of_last_gb_page);
-                self.two_megabyte_pages
+                self.allocator
+                    .two_megabyte_pages
                     .add_aligned_frames_with_scrap_allocator(
-                        &mut self.four_kilobyte_pages,
+                        &mut self.allocator.four_kilobyte_pages,
                         end_of_last_gb_page..end_of_last_gb_page,
                     );
                 return;
             }
         }
-        self.two_megabyte_pages
+        self.allocator
+            .two_megabyte_pages
             .add_aligned_frames_with_scrap_allocator(
-                &mut self.four_kilobyte_pages,
+                &mut self.allocator.four_kilobyte_pages,
                 memory_region.clone(),
             );
     }
