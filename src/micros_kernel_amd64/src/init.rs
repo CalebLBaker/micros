@@ -290,10 +290,10 @@ fn load_gdt(
 ) -> SegmentSelectors {
     tss.interrupt_stack_table[DOUBLE_FAULT_IST_INDEX as usize] = DOUBLE_FAULT_STACK_TOP;
     tss.privilege_stack_table[0] = INTERRUPT_STACK_BOTTOM;
-    let code_selector = gdt.add_entry(Descriptor::kernel_code_segment());
-    let tss_selector = gdt.add_entry(Descriptor::tss_segment(tss));
-    gdt.add_entry(Descriptor::user_data_segment());
-    gdt.add_entry(Descriptor::user_code_segment());
+    let code_selector = gdt.append(Descriptor::kernel_code_segment());
+    let tss_selector = gdt.append(Descriptor::tss_segment(tss));
+    gdt.append(Descriptor::user_data_segment());
+    gdt.append(Descriptor::user_code_segment());
     gdt.load();
     SegmentSelectors {
         code_selector,
@@ -333,9 +333,9 @@ fn set_last_entry(page_table: &mut PageTable, address: usize, flags: PageTableFl
 }
 
 fn set_interrupt_handlers(idt: &mut InterruptDescriptorTable) {
-    idt[InterruptIndex::Timer as usize].set_handler_fn(timer_interrupt_handler);
-    idt[InterruptIndex::Spurious as usize].set_handler_fn(spurious_interrupt_handler);
-    idt[InterruptIndex::Error as usize].set_handler_fn(error_interrupt_handler);
+    idt[InterruptIndex::Timer as u8].set_handler_fn(timer_interrupt_handler);
+    idt[InterruptIndex::Spurious as u8].set_handler_fn(spurious_interrupt_handler);
+    idt[InterruptIndex::Error as u8].set_handler_fn(error_interrupt_handler);
 }
 
 const fn page_size(page_table_level: u8) -> usize {
