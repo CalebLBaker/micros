@@ -51,29 +51,20 @@ pub unsafe fn initialize_operating_system(multiboot_info_ptr: u32, cpu_info: u32
     // affect
     DOUBLE_FAULT_STACK_BOTTOM.write_volatile(0xff);
 
-    let memory_manager_launch_info = boot_os(
-        &mut Amd64 {
-            allocator: if supports_gigabyte_pages(cpu_info) {
-                let mut four_kilobyte_pages = FrameAllocator::default();
-                four_kilobyte_pages.add_frame(addr_of!(p2_tables[0]) as usize);
-                four_kilobyte_pages.add_frame(addr_of!(p2_tables[1]) as usize);
-                Amd64FrameAllocator {
-                    four_kilobyte_pages,
-                    two_megabyte_pages: FrameAllocator::default(),
-                    gigabyte_pages: FfiOption::Some(FrameAllocator::default()),
-                }
-            } else {
-                Amd64FrameAllocator {
-                    four_kilobyte_pages: FrameAllocator::default(),
-                    two_megabyte_pages: FrameAllocator::default(),
-                    gigabyte_pages: FfiOption::None,
-                }
-            },
-        },
-        multiboot_info_ptr,
-    )?;
+    let proc = &mut *addr_of_mut!(PROC);
+    if supports_gigabyte_pages(cpu_info) {
+        proc.allocator
+            .four_kilobyte_pages
+            .add_frame(addr_of!(p2_tables[0]) as usize);
+        proc.allocator
+            .four_kilobyte_pages
+            .add_frame(addr_of!(p2_tables[1]) as usize);
+        proc.allocator.gigabyte_pages = FfiOption::Some(FrameAllocator::default());
+    }
+    let memory_manager_launch_info = boot_os(proc, multiboot_info_ptr)?;
 
     launch_memory_manager(
+        addr_of_mut!(proc.allocator),
         memory_manager_launch_info.root_page_table_address,
         memory_manager_launch_info.entry_point,
     );
@@ -86,6 +77,14 @@ static mut TSS: TaskStateSegment = TaskStateSegment::new();
 static mut GDT: GlobalDescriptorTable = GlobalDescriptorTable::new();
 
 static mut DOUBLE_FAULT_STACK: DoubleFaultStack = DoubleFaultStack([0; DOUBLE_FAULT_STACK_SIZE]);
+
+static mut PROC: Amd64 = Amd64 {
+    allocator: Amd64FrameAllocator {
+        four_kilobyte_pages: FrameAllocator::new(),
+        two_megabyte_pages: FrameAllocator::new(),
+        gigabyte_pages: FfiOption::None,
+    },
+};
 
 const GIGABYTE_PAGES_CPUID_BIT: u32 = 0x400_0000;
 

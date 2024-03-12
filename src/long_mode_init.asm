@@ -22,10 +22,11 @@ long_mode_start:
     call main
 
 ; Args:
-; rdi: physical address of root page table for memory manager
-; rsi: virtual address of memory manager main function
+; rdi: virtual address of root Amd64FrameAllocator structure
+; rsi: physical address of root page table for memory manager
+; rdx: virtual address of memory manager main function
 launch_memory_manager:
-	mov cr3, rdi
+	mov cr3, rsi
 	mov rsp, 0
 	mov ax, USER_DATA_SEGMENT
 	mov ds, ax
@@ -37,6 +38,6 @@ launch_memory_manager:
 	push 0
 	pushf
 	push USER_CODE_SEGMENT
-	push rsi
+	push rdx
 	iretq
 

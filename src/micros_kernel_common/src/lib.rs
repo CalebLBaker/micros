@@ -166,13 +166,18 @@ impl<const MEMORY_FRAME_SIZE: usize> FrameAllocator<MEMORY_FRAME_SIZE> {
                 ..end_of_last_full_page(memory_region.end, Self::FRAME_SIZE),
         );
     }
+
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            next: FfiOption::None,
+        }
+    }
 }
 
 impl<const FRAME_SIZE: usize> Default for FrameAllocator<FRAME_SIZE> {
     fn default() -> Self {
-        Self {
-            next: FfiOption::None,
-        }
+        Self::new()
     }
 }
 

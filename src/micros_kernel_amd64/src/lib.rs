@@ -9,6 +9,7 @@ mod apic;
 mod elf;
 mod init;
 
+use amd64_frame_allocator::Amd64FrameAllocator;
 use apic::end_interrupt;
 use core::panic::PanicInfo;
 use init::initialize_operating_system;
@@ -44,7 +45,11 @@ extern "C" {
     static mut p4_table: PageTable;
     static mut p2_tables: [PageTable; 2];
     static mut p1_table_for_stack: PageTable;
-    fn launch_memory_manager(root_page_table_address: usize, entry_point: usize) -> !;
+    fn launch_memory_manager(
+        allocator: *mut Amd64FrameAllocator,
+        root_page_table_address: usize,
+        entry_point: usize,
+    ) -> !;
 }
 
 extern "x86-interrupt" fn breakpoint_handler(_stack_frame: InterruptStackFrame) {}
