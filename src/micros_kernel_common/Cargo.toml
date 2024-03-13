@@ -1,7 +1,0 @@
-[package]
-name = "micros_kernel_common"
-version = "0.1.0"
-authors = ["CalebLBaker <calebbaker774@gmail.com>"]
-license = "BSL-1.0"
-edition = "2021"
-

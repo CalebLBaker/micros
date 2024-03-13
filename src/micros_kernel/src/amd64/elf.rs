@@ -1,5 +1,5 @@
+use crate::{ExecutableHeader, SegmentFlags, SegmentHeader};
 use core::mem::size_of;
-use micros_kernel_common::{ExecutableHeader, SegmentFlags, SegmentHeader};
 
 #[allow(clippy::module_name_repetitions)]
 #[repr(C)]

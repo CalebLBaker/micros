@@ -1,5 +1,5 @@
 [package]
-name = "micros_memory_manager_amd64"
+name = "micros_memory_manager"
 version = "0.1.0"
 authors = ["CalebLBaker <calebbaker774@gmail.com>"]
 license = "BSL-1.0"

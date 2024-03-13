@@ -1,4 +1,4 @@
-use micros_kernel_common::{FfiOption, FrameAllocator};
+use crate::{FfiOption, FrameAllocator};
 
 pub const FOUR_KILOBYTES: usize = 0x1000;
 pub const GIGABYTE: usize = 0x4000_0000;

@@ -4,11 +4,11 @@ target ?= x86_64-unknown-none
 image := build/micros-$(arch).elf
 iso := build/micros-$(arch).iso
 
-linker_script := src/micros_kernel_amd64/linker.ld
+linker_script := src/micros_kernel/linker.ld
 grub_cfg := src/grub.cfg
 assembly_source_files := $(wildcard src/*.asm)
 assembly_object_files := $(patsubst src/%.asm, build/src/%.o, $(assembly_source_files))
-kernel := target/$(target)/$(config)/libmicros_kernel_amd64.a
+kernel := target/$(target)/$(config)/libmicros_kernel.a
 
 .PHONY: all clean run iso rust_build
 
@@ -38,7 +38,7 @@ $(iso): $(image) $(grub_cfg) LICENSE build/third-party-licenses.html rust_build
 	@rm -rf build/isofiles
 	@mkdir -p build/isofiles/boot/grub
 	@cp $(image) build/isofiles/boot/micros.elf
-	@cp target/$(target)/$(config)/micros_memory_manager_$(arch) build/isofiles/boot/memory_manager.elf
+	@cp target/$(target)/$(config)/micros_memory_manager build/isofiles/boot/memory_manager.elf
 	@cp $(grub_cfg) build/isofiles/boot/grub
 	@cp LICENSE build/isofiles/
 	@cp build/third-party-licenses.html build/isofiles/
@@ -52,5 +52,5 @@ build/src/%.o: src/%.asm
 	@nasm -felf64 $< -o $@
 
 kernellinecount:
-	cloc src/micros_kernel_common src/micros_kernel_amd64 src/boot.asm src/long_mode_init.asm --exclude-lang=TOML
+	cloc src/micros_kernel  src/boot.asm src/long_mode_init.asm --exclude-lang=TOML
 

@@ -1,8 +1,12 @@
 use crate::{
-    amd64_frame_allocator::{Amd64FrameAllocator, FOUR_KILOBYTES, GIGABYTE},
-    apic, breakpoint_handler, double_fault_handler, elf, error_interrupt_handler,
-    launch_memory_manager, p1_table_for_stack, p2_tables, p4_table, page_fault_handler,
-    spurious_interrupt_handler, timer_interrupt_handler,
+    amd64::{
+        amd64_frame_allocator::{Amd64FrameAllocator, FOUR_KILOBYTES, GIGABYTE},
+        apic, breakpoint_handler, double_fault_handler, elf, error_interrupt_handler,
+        launch_memory_manager, p1_table_for_stack, p2_tables, p4_table, page_fault_handler,
+        spurious_interrupt_handler, timer_interrupt_handler,
+    },
+    boot_os, copy_and_zero_fill, end_of_last_full_page, first_full_page_address,
+    slice_with_bounds_check, Architecture, FfiOption, FrameAllocator, SegmentFlags,
 };
 use apic::InterruptIndex;
 use core::{
@@ -11,10 +15,6 @@ use core::{
     slice,
 };
 use elf::{ElfHeader, ProgramHeader};
-use micros_kernel_common::{
-    boot_os, copy_and_zero_fill, end_of_last_full_page, first_full_page_address,
-    slice_with_bounds_check, Architecture, FfiOption, FrameAllocator, SegmentFlags,
-};
 use x86_64::{
     addr::PhysAddr,
     instructions::{interrupts, tables::load_tss},

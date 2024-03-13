@@ -1,7 +1,3 @@
-#![no_std]
-#![feature(abi_x86_interrupt)]
-#![deny(clippy::all)]
-#![deny(clippy::pedantic)]
 #![allow(clippy::struct_field_names)]
 
 mod amd64_frame_allocator;
@@ -12,7 +8,7 @@ mod init;
 use amd64_frame_allocator::Amd64FrameAllocator;
 use apic::end_interrupt;
 use core::panic::PanicInfo;
-use init::initialize_operating_system;
+pub use init::initialize_operating_system;
 use x86_64::{
     instructions::hlt,
     structures::{
@@ -21,24 +17,15 @@ use x86_64::{
     },
 };
 
-#[no_mangle]
-pub extern "C" fn main(multiboot_info_ptr: u32, cpu_info: u32) -> ! {
-    unsafe {
-        initialize_operating_system(multiboot_info_ptr, cpu_info);
-    }
-    halt()
-}
-
-#[no_mangle]
-pub extern "C" fn halt() -> ! {
-    loop {
-        hlt();
-    }
-}
-
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
     halt()
+}
+
+pub fn halt() -> ! {
+    loop {
+        hlt();
+    }
 }
 
 extern "C" {

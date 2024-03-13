@@ -1,5 +1,5 @@
 [package]
-name = "micros_kernel_amd64"
+name = "micros_kernel"
 version = "0.1.0"
 authors = ["CalebLBaker <calebbaker774@gmail.com>"]
 license = "BSL-1.0"
@@ -8,8 +8,7 @@ edition = "2021"
 [lib]
 crate-type = ["staticlib"]
 
-[dependencies]
-micros_kernel_common = { path = "../micros_kernel_common" }
+[target.'cfg(target_arch = "x86_64")'.dependencies]
 x86_64 = "0.15.0"
 x2apic = "0.4.3"
 spin = "0.9.8"

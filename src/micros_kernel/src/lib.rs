@@ -6,8 +6,12 @@
 #![feature(slice_split_at_unchecked)]
 #![feature(pointer_is_aligned)]
 #![feature(try_trait_v2)]
+#![feature(abi_x86_interrupt)]
 
 mod multiboot2;
+
+#[cfg(target_arch = "x86_64")]
+mod amd64;
 
 use core::{
     cmp::{max, min},
@@ -23,7 +27,16 @@ use multiboot2::{
     ACPI_MEMORY, AVAILABLE_MEMORY,
 };
 
-pub trait Architecture: Sized {
+#[cfg(target_arch = "x86_64")]
+#[no_mangle]
+pub extern "C" fn main(multiboot_info_ptr: u32, cpu_info: u32) -> ! {
+    unsafe {
+        amd64::initialize_operating_system(multiboot_info_ptr, cpu_info);
+    }
+    amd64::halt()
+}
+
+trait Architecture: Sized {
     const INITIAL_VIRTUAL_MEMORY_SIZE: usize;
 
     type PageTable;
@@ -46,7 +59,7 @@ pub trait Architecture: Sized {
     ) -> Option<()>;
 }
 
-pub trait ExecutableHeader {
+trait ExecutableHeader {
     fn is_valid(&self, file_size: usize) -> bool;
 
     fn num_segments(&self) -> usize;
@@ -56,7 +69,7 @@ pub trait ExecutableHeader {
     fn entry(&self) -> usize;
 }
 
-pub trait SegmentHeader {
+trait SegmentHeader {
     fn segment_type(&self) -> u32;
     fn offset(&self) -> usize;
     fn address(&self) -> usize;
@@ -66,29 +79,29 @@ pub trait SegmentHeader {
 }
 
 #[derive(Clone, Copy)]
-pub struct SegmentFlags(pub u32);
+struct SegmentFlags(u32);
 
 impl SegmentFlags {
     #[must_use]
-    pub fn writable(self) -> bool {
+    fn writable(self) -> bool {
         (self.0 & ELF_WRITABLE_SEGMENT) != 0
     }
 
     #[must_use]
-    pub fn executable(self) -> bool {
+    fn executable(self) -> bool {
         (self.0 & ELF_EXECUTABLE_SEGMENT) != 0
     }
 }
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-pub enum FfiOption<T> {
+enum FfiOption<T> {
     None,
     Some(T),
 }
 
 impl<T> FfiOption<T> {
-    pub fn as_mut(&mut self) -> Option<&mut T> {
+    fn as_mut(&mut self) -> Option<&mut T> {
         if let Self::Some(value) = self {
             Some(value)
         } else {
@@ -119,32 +132,32 @@ impl<T> FromResidual<Option<Infallible>> for FfiOption<T> {
 }
 
 #[repr(C)]
-pub struct FrameAllocator<const FRAME_SIZE: usize> {
+struct FrameAllocator<const FRAME_SIZE: usize> {
     next: FfiOption<*mut FrameAllocator<FRAME_SIZE>>,
 }
 
 impl<const MEMORY_FRAME_SIZE: usize> FrameAllocator<MEMORY_FRAME_SIZE> {
     const FRAME_SIZE: usize = MEMORY_FRAME_SIZE;
 
-    pub unsafe fn add_frames(&mut self, memory_area: Range<usize>) {
+    unsafe fn add_frames(&mut self, memory_area: Range<usize>) {
         for frame in memory_area.step_by(Self::FRAME_SIZE) {
             self.add_frame(frame);
         }
     }
 
-    pub unsafe fn get_frame(&mut self) -> Option<usize> {
+    unsafe fn get_frame(&mut self) -> Option<usize> {
         let ret = self.next?;
         self.next = (*ret).next;
         Some(ret as usize)
     }
 
-    pub unsafe fn add_frame(&mut self, frame_address: usize) {
+    unsafe fn add_frame(&mut self, frame_address: usize) {
         let frame_ptr = frame_address as *mut Self;
         (*frame_ptr).next = self.next;
         self.next = FfiOption::Some(&mut *frame_ptr);
     }
 
-    pub unsafe fn add_aligned_frames_with_scrap_allocator<const SMALLER_FRAME_SIZE: usize>(
+    unsafe fn add_aligned_frames_with_scrap_allocator<const SMALLER_FRAME_SIZE: usize>(
         &mut self,
         smaller_allocator: &mut FrameAllocator<SMALLER_FRAME_SIZE>,
         memory_region: Range<usize>,
@@ -168,7 +181,7 @@ impl<const MEMORY_FRAME_SIZE: usize> FrameAllocator<MEMORY_FRAME_SIZE> {
     }
 
     #[must_use]
-    pub const fn new() -> Self {
+    const fn new() -> Self {
         Self {
             next: FfiOption::None,
         }
@@ -181,12 +194,12 @@ impl<const FRAME_SIZE: usize> Default for FrameAllocator<FRAME_SIZE> {
     }
 }
 
-pub struct ProcessLaunchInfo {
-    pub root_page_table_address: usize,
-    pub entry_point: usize,
+struct ProcessLaunchInfo {
+    root_page_table_address: usize,
+    entry_point: usize,
 }
 
-pub unsafe fn boot_os<Proc: Architecture>(
+unsafe fn boot_os<Proc: Architecture>(
     proc: &mut Proc,
     multiboot_info_ptr: u32,
 ) -> Option<ProcessLaunchInfo> {
@@ -227,7 +240,7 @@ pub unsafe fn boot_os<Proc: Architecture>(
 }
 
 #[must_use]
-pub fn first_full_page_address(start_address: usize, page_size: usize) -> usize {
+fn first_full_page_address(start_address: usize, page_size: usize) -> usize {
     let page_offset = start_address % page_size;
     if page_offset == 0 {
         start_address
@@ -237,17 +250,17 @@ pub fn first_full_page_address(start_address: usize, page_size: usize) -> usize 
 }
 
 #[must_use]
-pub fn end_of_last_full_page(end_address: usize, page_size: usize) -> usize {
+fn end_of_last_full_page(end_address: usize, page_size: usize) -> usize {
     end_address - end_address % page_size
 }
 
-pub fn copy_and_zero_fill(dest: &mut [u8], src: &[u8]) {
+fn copy_and_zero_fill(dest: &mut [u8], src: &[u8]) {
     dest[0..src.len()].copy_from_slice(src);
     dest[src.len()..].fill(0);
 }
 
 #[must_use]
-pub fn slice_with_bounds_check(src: &[u8], index: usize, len: usize) -> &[u8] {
+fn slice_with_bounds_check(src: &[u8], index: usize, len: usize) -> &[u8] {
     &src[index.min(src.len())..(index + len).min(src.len())]
 }
 

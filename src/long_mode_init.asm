@@ -7,7 +7,6 @@ USER_CODE_SEGMENT equ 0x2b
 section .text
 bits 64
 extern main
-extern halt
 long_mode_start:
     mov rsp, 0
 
