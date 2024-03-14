@@ -3,7 +3,7 @@
 members = [
 	"src/micros_console_writer",
 	"src/micros_memory_manager",
-	"src/micros_kernel",
+	"src/micros_kernel", "src/frame_allocation",
 ]
 resolver = "2"
 

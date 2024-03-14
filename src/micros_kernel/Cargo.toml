@@ -1,12 +1,15 @@
 [package]
 name = "micros_kernel"
 version = "0.1.0"
-authors = ["CalebLBaker <calebbaker774@gmail.com>"]
-license = "BSL-1.0"
 edition = "2021"
+authors = ["Caleb Baker <calebbaker774@gmail.com>"]
+license = "BSL-1.0"
 
 [lib]
 crate-type = ["staticlib"]
+
+[dependencies]
+frame_allocation = { path = "../frame_allocation" }
 
 [target.'cfg(target_arch = "x86_64")'.dependencies]
 x86_64 = "0.15.0"

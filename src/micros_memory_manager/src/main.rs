@@ -7,8 +7,9 @@
 use core::{fmt::Write, panic::PanicInfo};
 use micros_console_writer::WRITER;
 
+#[cfg(target_arch = "x86_64")]
 #[no_mangle]
-pub extern "C" fn main() -> ! {
+pub extern "C" fn main(_: *mut frame_allocation::amd64::Amd64FrameAllocator) -> ! {
     let _ = WRITER.lock().write_str("Hello, World!");
     loop {}
 }

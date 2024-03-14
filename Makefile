@@ -6,8 +6,8 @@ iso := build/micros-$(arch).iso
 
 linker_script := src/micros_kernel/linker.ld
 grub_cfg := src/grub.cfg
-assembly_source_files := $(wildcard src/*.asm)
-assembly_object_files := $(patsubst src/%.asm, build/src/%.o, $(assembly_source_files))
+assembly_source_files := $(wildcard src/micros_kernel/*.asm)
+assembly_object_files := $(patsubst src/micros_kernel/%.asm, build/src/micros_kernel/%.o, $(assembly_source_files))
 kernel := target/$(target)/$(config)/libmicros_kernel.a
 
 .PHONY: all clean run iso rust_build
@@ -47,10 +47,10 @@ $(iso): $(image) $(grub_cfg) LICENSE build/third-party-licenses.html rust_build
 $(image): $(assembly_object_files) $(linker_script) rust_build
 	@ld.lld -n -s -T $(linker_script) -o $(image) $(assembly_object_files) $(kernel)
 
-build/src/%.o: src/%.asm
+build/src/micros_kernel/%.o: src/micros_kernel/%.asm
 	@mkdir -p $(shell dirname $@)
 	@nasm -felf64 $< -o $@
 
 kernellinecount:
-	cloc src/micros_kernel  src/boot.asm src/long_mode_init.asm --exclude-lang=TOML
+	cloc src/micros_kernel --exclude-lang=TOML
 

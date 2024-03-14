@@ -1,13 +1,12 @@
 #![allow(clippy::struct_field_names)]
 
-mod amd64_frame_allocator;
 mod apic;
 mod elf;
 mod init;
 
-use amd64_frame_allocator::Amd64FrameAllocator;
 use apic::end_interrupt;
 use core::panic::PanicInfo;
+use frame_allocation::amd64::Amd64FrameAllocator;
 pub use init::initialize_operating_system;
 use x86_64::{
     instructions::hlt,
