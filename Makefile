@@ -52,5 +52,5 @@ build/src/micros_kernel/%.o: src/micros_kernel/%.asm
 	@nasm -felf64 $< -o $@
 
 kernellinecount:
-	cloc src/micros_kernel --exclude-lang=TOML
+	cloc src/micros_kernel src/frame_allocation --exclude-lang=TOML
 
