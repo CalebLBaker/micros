@@ -5,7 +5,7 @@ image := build/micros-$(arch).elf
 iso := build/micros-$(arch).iso
 
 linker_script := src/micros_kernel/linker.ld
-grub_cfg := src/grub.cfg
+limine_cfg := src/limine.cfg
 assembly_source_files := $(wildcard src/micros_kernel/*.asm)
 assembly_object_files := $(patsubst src/micros_kernel/%.asm, build/src/micros_kernel/%.o, $(assembly_source_files))
 kernel := target/$(target)/$(config)/libmicros_kernel.a
@@ -13,6 +13,9 @@ kernel := target/$(target)/$(config)/libmicros_kernel.a
 .PHONY: all clean run iso rust_build
 
 all: $(iso)
+
+limine/limine:
+	@cd limine && make limine
 
 clean:
 	@rm -rf build
@@ -34,15 +37,21 @@ iso: $(iso)
 build/third-party-licenses.html: about.toml about.hbs
 	@cargo about generate about.hbs -o build/third-party-licenses.html
 
-$(iso): $(image) $(grub_cfg) LICENSE build/third-party-licenses.html rust_build
-	@rm -rf build/isofiles
-	@mkdir -p build/isofiles/boot/grub
-	@cp $(image) build/isofiles/boot/micros.elf
-	@cp target/$(target)/$(config)/micros_memory_manager build/isofiles/boot/memory_manager.elf
-	@cp $(grub_cfg) build/isofiles/boot/grub
-	@cp LICENSE build/isofiles/
-	@cp build/third-party-licenses.html build/isofiles/
-	@grub-mkrescue -o $(iso) build/isofiles 2> /dev/null
+$(iso): $(image) $(limine_cfg) LICENSE build/third-party-licenses.html rust_build
+	rm -rf build/isofiles
+	mkdir -p build/isofiles/EFI/BOOT
+	cp $(image) build/isofiles/micros.elf
+	cp target/$(target)/$(config)/micros_memory_manager build/isofiles/memory_manager.elf
+	cp $(limine_cfg) build/isofiles/
+	cp LICENSE build/isofiles/
+	cp build/third-party-licenses.html build/isofiles/
+	cp limine/limine-uefi-cd.bin build/isofiles/
+	cp limine/limine-bios-cd.bin build/isofiles/
+	cp limine/limine-bios.sys build/isofiles/
+	cp limine/BOOTX64.EFI build/isofiles/EFI/BOOT/
+	xorriso -as mkisofs -b limine-bios-cd.bin -no-emul-boot -boot-load-size 4 -boot-info-table --efi-boot limine-uefi-cd.bin -efi-boot-part --efi-boot-image --protective-msdos-label build/isofiles -o $(iso)
+	limine/limine bios-install $(iso)
+
 
 $(image): $(assembly_object_files) $(linker_script) rust_build
 	@ld.lld -n -s -T $(linker_script) -o $(image) $(assembly_object_files) $(kernel)
