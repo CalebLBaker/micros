@@ -2,8 +2,15 @@ arch ?= amd64
 config ?= release
 target ?= x86_64-unknown-none
 iso := build/micros-$(arch).iso
-key := /home/caleb/private/db.key
-cert := db.crt
+
+# Keys used for signing actual binary releases (private key is stored securely outside of the repository)
+# key := /home/caleb/private/db.key
+# cert := keys/db.crt
+
+# Keys generated for convenience in development and testing
+key := keys/tmp.key
+cert := keys/tmp.crt
+
 isodir := build/isofiles
 image := $(isodir)/micros.elf
 
@@ -16,6 +23,11 @@ kernel := target/$(target)/$(config)/libmicros_kernel.a
 .PHONY: all clean run iso rust_build
 
 all: $(iso)
+
+keys/tmp.crt:
+	openssl req -newkey rsa:4096 -nodes -keyout keys/tmp.key -new -x509 -sha256 -days 36500 -subj "/CN=Temporary Dev Micros Key/" -out $@
+
+keys/tmp.key: keys/tmp.crt
 
 limine/limine:
 	$(MAKE) -C limine limine
