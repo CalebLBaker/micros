@@ -20,7 +20,7 @@ use core::{
     slice,
 };
 use multiboot2::{
-    BootInformation, BootInformationHeader, BootModuleTag, MemoryMapEntry, MemoryMapTag,
+    BootInformation, BootInformationHeader, BootModuleTag, MemoryMapEntry, MemoryMapTag, FrameBufferTag,
     ACPI_MEMORY, AVAILABLE_MEMORY,
 };
 
@@ -113,13 +113,22 @@ unsafe fn boot_os<Proc: Architecture>(
     // Add free frames from first 4 GB to available frame list
     let memory_manager_bounds = memory_manager_executable(boot_info)?;
 
-    let mut memory_regions_in_use = [
+    let mut memory_regions_in_use_arr = [
         addr_of!(header_start) as usize..addr_of!(kernel_end) as usize,
         boot_info.address_range(),
         memory_manager_bounds.clone(),
+        0..0,
     ];
+    let memory_regions_in_use = if let Some(framebuffer_tag) = boot_info.tags_of_type::<FrameBufferTag>().next() {
+        let framebuffer = framebuffer_tag.framebuffer.as_ptr_range();
+        memory_regions_in_use_arr[3] = framebuffer.start as usize..framebuffer.end as usize;
+        &mut memory_regions_in_use_arr
+    }
+    else {
+        &mut memory_regions_in_use_arr[0..3]
+    };
     let available_memory_regions = unused_memory_regions(
-        &mut memory_regions_in_use,
+        memory_regions_in_use,
         Proc::INITIAL_VIRTUAL_MEMORY_SIZE,
     )?;
 

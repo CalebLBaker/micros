@@ -100,6 +100,42 @@ impl<'a> MutibootTag<'a> for BootModuleTag<'a> {
     const TAG_TYPE: u32 = 3;
 }
 
+pub struct FrameBufferTag<'a> {
+    pub framebuffer: &'a mut[u8],
+    pitch: u32,
+    width: u32,
+    height: u32,
+    bits_per_pixel: u8,
+    framebuffer_type: FrameBufferType<'a>,
+}
+
+impl<'a> TryFrom<&'a [u8]> for FrameBufferTag<'a> {
+    type Error = ();
+
+    fn try_from(value: &'a [u8]) -> Result<Self, Self::Error> {
+        let header_len = size_of::<FrameBufferTagHeader>();
+        if value.len() < header_len {
+            Err(())
+        } else {
+            let header = unsafe {
+                &*aligned_pointer_cast::<FrameBufferTagHeader>(value.as_ptr()).ok_or(())?
+            };
+            Ok(Self {
+                framebuffer: unsafe { slice::from_raw_parts_mut(header.framebuffer as *mut u8, header.pitch as usize * header.height as usize) },
+                pitch: header.pitch,
+                width: header.width,
+                height: header.height,
+                bits_per_pixel: header.bits_per_pixel,
+                framebuffer_type: FrameBufferType::new(header.framebuffer_type, &value[header_len..]).ok_or(())?,
+            })
+        }
+    }
+}
+
+impl<'a> MutibootTag<'a> for FrameBufferTag<'a> {
+    const TAG_TYPE: u32 = 8;
+}
+
 pub struct BootInfoTag<'a> {
     tag_type: u32,
     data: &'a [u8],
@@ -165,6 +201,82 @@ impl<'a> Iterator for MultibootTagIterator<'a> {
                     data: tag_data,
                 })
             }
+        }
+    }
+}
+
+const INDEXED_COLOR_MODE: u8 = 0;
+const RGB_COLOR_MODE: u8 = 1;
+const EGA_TEXT_MODE: u8 = 2;
+
+#[repr(C)]
+struct FrameBufferTagHeader {
+    header: BootInfoTagHeader,
+    framebuffer: u64,
+    pitch: u32,
+    width: u32,
+    height: u32,
+    bits_per_pixel: u8,
+    framebuffer_type: u8,
+    reserved: u8,
+}
+
+#[repr(C)]
+struct Rgb {
+    red: u8,
+    green: u8,
+    blue: u8,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct FramebufferPixelColorDescriptor {
+    position: u8,
+    size: u8,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct FramebufferPixelDescriptor {
+    red: FramebufferPixelColorDescriptor,
+    green: FramebufferPixelColorDescriptor,
+    blue: FramebufferPixelColorDescriptor,
+}
+
+enum FrameBufferType<'a> {
+    IndexedColor(&'a [Rgb]),
+    RgbColor(FramebufferPixelDescriptor),
+    Ega,
+}
+
+impl<'a> FrameBufferType<'a> {
+    fn new(type_tag: u8, data: &'a [u8]) -> Option<Self> {
+        match type_tag {
+            INDEXED_COLOR_MODE => {
+                let number_of_colors =
+                    u32::from_le_bytes(data[..size_of::<u32>()].try_into().ok()?) as usize;
+                if data.len() > size_of::<u32>() + number_of_colors * size_of::<Rgb>() {
+                    None
+                } else {
+                    Some(FrameBufferType::IndexedColor(unsafe {
+                        slice::from_raw_parts(
+                            aligned_pointer_cast::<Rgb>(
+                                data.as_ptr().add(size_of::<u32>()),
+                            )?,
+                            number_of_colors,
+                        )
+                    }))
+                }
+            },
+            RGB_COLOR_MODE =>
+                if data.len() < size_of::<FramebufferPixelDescriptor>() {
+                    None
+                }
+            else {
+                Some(FrameBufferType::RgbColor(unsafe {*aligned_pointer_cast::<FramebufferPixelDescriptor>(data.as_ptr())?}))
+            },
+            EGA_TEXT_MODE => Some(FrameBufferType::Ega),
+            _ => None,
         }
     }
 }

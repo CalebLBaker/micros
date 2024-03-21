@@ -23,6 +23,7 @@ PAGING_FLAG           equ 0x80000000
 LONG_CODE_SEGMENT     equ 0x20980000000000
 MODULE_ALIGNMENT_TAG  equ 6
 MULTIBOOT_END_TAG     equ 0
+FRAMEBUFFER_TAG       equ 5
 
 ; Declare a multiboot header that marks the program as a kernel.
 ; Format is documented in the multiboot standard
@@ -42,6 +43,13 @@ header_start:
 	dw MODULE_ALIGNMENT_TAG ; type
 	dw 0 ; flags
 	dd 8 ; size
+
+	dw FRAMEBUFFER_TAG
+	dw 0
+	dd 20
+	dw 1366
+	dw 768
+	dw 32
 
     ; required end tag
     dw MULTIBOOT_END_TAG ; type
