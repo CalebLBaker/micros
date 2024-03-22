@@ -1,0 +1,9 @@
+[package]
+name = "framebuffer"
+version = "0.1.0"
+edition = "2021"
+authors = ["Caleb Baker <calebbaker774@gmail.com>"]
+license = "BSL-1.0"
+
+[dependencies]
+multiboot2 = { path = "../multiboot2" }

@@ -3,10 +3,7 @@
 #![deny(clippy::pedantic)]
 #![allow(clippy::missing_errors_doc)]
 #![feature(slice_split_at_unchecked)]
-#![feature(pointer_is_aligned)]
 #![feature(abi_x86_interrupt)]
-
-mod multiboot2;
 
 #[cfg(target_arch = "x86_64")]
 mod amd64;
