@@ -5,7 +5,7 @@ iso := build/micros-$(arch).iso
 
 # Keys used for signing actual binary releases (private key is stored securely outside of the repository)
 # key := /home/caleb/private/db.key
-# cert := keys/db.crt
+# cert := keys/micros.crt
 
 # Keys generated for convenience in development and testing
 key := keys/tmp.key
