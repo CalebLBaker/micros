@@ -5,12 +5,6 @@
 use core::{mem::size_of, slice};
 use multiboot2::{aligned_pointer_cast, FramebufferTag};
 
-pub const WHITE: Rgb = Rgb {
-    red: 0xff,
-    green: 0xff,
-    blue: 0xff,
-};
-
 pub enum Framebuffer<'a> {
     IndexedColor(IndexedColorFramebuffer<'a>),
     RgbColor(RgbColorFramebuffer<'a>),
