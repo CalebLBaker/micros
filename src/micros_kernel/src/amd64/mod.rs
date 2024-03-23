@@ -33,6 +33,7 @@ extern "C" {
     static mut p1_table_for_stack: PageTable;
     fn launch_memory_manager(
         allocator: *mut Amd64FrameAllocator,
+        boot_info_ptr: *const u8,
         root_page_table_address: usize,
         entry_point: usize,
     ) -> !;

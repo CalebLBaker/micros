@@ -7,4 +7,5 @@ license = "BSL-1.0"
 
 [dependencies]
 frame_allocation = { path = "../frame_allocation" }
-micros_console_writer = { path = "../micros_console_writer" }
+multiboot2 = { path = "../multiboot2" }
+framebuffer = { path = "../framebuffer" }

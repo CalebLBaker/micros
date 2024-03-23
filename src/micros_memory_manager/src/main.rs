@@ -3,19 +3,33 @@
 #![deny(clippy::all)]
 #![deny(clippy::pedantic)]
 #![allow(clippy::empty_loop)]
+#![allow(clippy::missing_safety_doc)]
 
-use core::{fmt::Write, panic::PanicInfo};
-use micros_console_writer::WRITER;
+use core::panic::PanicInfo;
+use framebuffer::StandardRgbFramebuffer;
+use multiboot2::{BootInformation, FramebufferTag};
 
 #[cfg(target_arch = "x86_64")]
 #[no_mangle]
-pub extern "C" fn main(_: *mut frame_allocation::amd64::Amd64FrameAllocator) -> ! {
-    let _ = WRITER.lock().write_str("Hello, World!");
+pub unsafe extern "C" fn main(
+    _: *mut frame_allocation::amd64::Amd64FrameAllocator,
+    boot_info_ptr: *const u8,
+) -> ! {
+    if let Some(mut framebuffer) = get_framebuffer(boot_info_ptr) {
+        framebuffer.paint_the_screen_white();
+    }
     loop {}
+}
+
+unsafe fn get_framebuffer(boot_info_ptr: *const u8) -> Option<StandardRgbFramebuffer<'static>> {
+    StandardRgbFramebuffer::from_tag(
+        BootInformation::new(boot_info_ptr)
+            .tags_of_type::<FramebufferTag>()
+            .next()?,
+    )
 }
 
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
-    let _ = WRITER.lock().write_str("We're panicing!");
     loop {}
 }

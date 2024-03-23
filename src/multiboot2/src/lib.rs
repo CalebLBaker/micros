@@ -1,5 +1,8 @@
 #![no_std]
 #![feature(pointer_is_aligned)]
+#![feature(slice_split_at_unchecked)]
+#![allow(clippy::missing_errors_doc)]
+#![allow(clippy::missing_safety_doc)]
 
 use core::{
     mem::{align_of, size_of},
@@ -89,11 +92,16 @@ impl<'a> TryFrom<&'a [u8]> for BootModuleTag<'a> {
             Ok(Self {
                 mod_start: header.mod_start,
                 mod_end: header.mod_end,
-                string: str::from_utf8(value.split_at(size_of::<BootModuleHeader>()).1)
-                    .map_err(|_| ())?
-                    .split('\0')
-                    .next()
-                    .ok_or(())?,
+                string: str::from_utf8(
+                    value
+                        .split_first_chunk::<{ size_of::<BootModuleHeader>() }>()
+                        .ok_or(())?
+                        .1,
+                )
+                .map_err(|_| ())?
+                .split('\0')
+                .next()
+                .ok_or(())?,
             })
         }
     }
@@ -104,13 +112,13 @@ impl<'a> MutibootTag<'a> for BootModuleTag<'a> {
 }
 
 pub struct FramebufferTag<'a> {
-    pub framebuffer: &'a mut[u8],
+    pub framebuffer: *mut u8,
     pub pitch: u32,
     pub width: u32,
     pub height: u32,
     pub bits_per_pixel: u8,
     pub framebuffer_type: u8,
-    pub color_data: &'a[u8],
+    pub color_data: &'a [u8],
 }
 
 impl<'a> TryFrom<&'a [u8]> for FramebufferTag<'a> {
@@ -125,7 +133,7 @@ impl<'a> TryFrom<&'a [u8]> for FramebufferTag<'a> {
                 &*aligned_pointer_cast::<FramebufferTagHeader>(value.as_ptr()).ok_or(())?
             };
             Ok(Self {
-                framebuffer: unsafe { slice::from_raw_parts_mut(header.framebuffer as *mut u8, header.pitch as usize * header.height as usize) },
+                framebuffer: header.framebuffer as *mut u8,
                 pitch: header.pitch,
                 width: header.width,
                 height: header.height,
@@ -152,6 +160,15 @@ pub struct BootInformation<'a> {
 }
 
 impl<'a> BootInformation<'a> {
+    pub unsafe fn new(boot_info_ptr: *const u8) -> Self {
+        let boot_info_size = (*(boot_info_ptr as *const BootInformationHeader)).total_size as usize;
+        BootInformation {
+            tags: slice::from_raw_parts(boot_info_ptr, boot_info_size)
+                .split_at_unchecked(size_of::<BootInformationHeader>())
+                .1,
+        }
+    }
+
     pub fn tags_of_type<TagType: MutibootTag<'a> + 'a>(self) -> impl Iterator<Item = TagType> + 'a {
         self.into_iter().filter_map(|tag| {
             if tag.tag_type == TagType::TAG_TYPE {
@@ -250,4 +267,3 @@ struct BootModuleHeader {
     mod_start: u32,
     mod_end: u32,
 }
-

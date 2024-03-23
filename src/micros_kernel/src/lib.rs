@@ -2,7 +2,6 @@
 #![deny(clippy::all)]
 #![deny(clippy::pedantic)]
 #![allow(clippy::missing_errors_doc)]
-#![feature(slice_split_at_unchecked)]
 #![feature(abi_x86_interrupt)]
 
 #[cfg(target_arch = "x86_64")]
@@ -11,14 +10,13 @@ mod amd64;
 use core::{
     cmp::{max, min},
     iter::once,
-    mem::size_of,
     ops::Range,
     ptr::addr_of,
     slice,
 };
 use multiboot2::{
-    BootInformation, BootInformationHeader, BootModuleTag, MemoryMapEntry, MemoryMapTag, FrameBufferTag,
-    ACPI_MEMORY, AVAILABLE_MEMORY,
+    BootInformation, BootModuleTag, FramebufferTag, MemoryMapEntry, MemoryMapTag, ACPI_MEMORY,
+    AVAILABLE_MEMORY,
 };
 
 #[cfg(target_arch = "x86_64")]
@@ -94,16 +92,10 @@ struct ProcessLaunchInfo {
 
 unsafe fn boot_os<Proc: Architecture>(
     proc: &mut Proc,
-    multiboot_info_ptr: u32,
+    multiboot_info_ptr: *const u8,
 ) -> Option<ProcessLaunchInfo> {
     // Initialize available memory and set up page tables
-    let boot_info_size =
-        (*(multiboot_info_ptr as *const BootInformationHeader)).total_size as usize;
-    let boot_info = BootInformation {
-        tags: slice::from_raw_parts(multiboot_info_ptr as *const u8, boot_info_size)
-            .split_at_unchecked(size_of::<BootInformationHeader>())
-            .1,
-    };
+    let boot_info = BootInformation::new(multiboot_info_ptr);
 
     let mut physical_memory_size = 0;
 
@@ -116,18 +108,18 @@ unsafe fn boot_os<Proc: Architecture>(
         memory_manager_bounds.clone(),
         0..0,
     ];
-    let memory_regions_in_use = if let Some(framebuffer_tag) = boot_info.tags_of_type::<FrameBufferTag>().next() {
-        let framebuffer = framebuffer_tag.framebuffer.as_ptr_range();
-        memory_regions_in_use_arr[3] = framebuffer.start as usize..framebuffer.end as usize;
+    let memory_regions_in_use = if let Some(framebuffer_tag) =
+        boot_info.tags_of_type::<FramebufferTag>().next()
+    {
+        let framebuffer_addr = framebuffer_tag.framebuffer as usize;
+        memory_regions_in_use_arr[3] = framebuffer_addr
+            ..framebuffer_addr + (framebuffer_tag.height as usize * framebuffer_tag.pitch as usize);
         &mut memory_regions_in_use_arr
-    }
-    else {
+    } else {
         &mut memory_regions_in_use_arr[0..3]
     };
-    let available_memory_regions = unused_memory_regions(
-        memory_regions_in_use,
-        Proc::INITIAL_VIRTUAL_MEMORY_SIZE,
-    )?;
+    let available_memory_regions =
+        unused_memory_regions(memory_regions_in_use, Proc::INITIAL_VIRTUAL_MEMORY_SIZE)?;
 
     for memory_area in available_memory_areas(boot_info.tags_of_type::<MemoryMapTag>().next()?) {
         physical_memory_size = max(physical_memory_size, memory_area_end(memory_area));
