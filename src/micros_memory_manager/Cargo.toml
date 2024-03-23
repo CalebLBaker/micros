@@ -1,6 +1,6 @@
 [package]
 name = "micros_memory_manager"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 authors = ["Caleb Baker <calebbaker774@gmail.com>"]
 license = "BSL-1.0"
