@@ -5,11 +5,11 @@ iso := build/micros-$(arch).iso
 
 # Keys used for signing actual binary releases (private key is stored securely outside of the repository)
 # key := /home/caleb/private/db.key
-# cert := keys/micros.crt
+# cert := release/micros.crt
 
 # Keys generated for convenience in development and testing
-key := keys/tmp.key
-cert := keys/tmp.crt
+key := build/tmp.key
+cert := build/tmp.crt
 
 isodir := build/isofiles
 image := $(isodir)/micros.elf
@@ -24,10 +24,10 @@ kernel := target/$(target)/$(config)/libmicros_kernel.a
 
 all: $(iso)
 
-keys/tmp.crt:
-	openssl req -newkey rsa:4096 -nodes -keyout keys/tmp.key -new -x509 -sha256 -days 36500 -subj "/CN=Temporary Dev Micros Key/" -out $@
+build/tmp.crt: build
+	openssl req -newkey rsa:4096 -nodes -keyout build/tmp.key -new -x509 -sha256 -days 36500 -subj "/CN=Temporary Dev Micros Key/" -out $@
 
-keys/tmp.key: keys/tmp.crt
+build/tmp.key: build/tmp.crt
 
 limine/limine:
 	$(MAKE) -C limine limine
@@ -56,6 +56,8 @@ $(isodir)/EFI/BOOT:
 	mkdir -p $@
 
 $(isodir): $(isodir)/EFI/BOOT
+
+build: $(isodir)
 
 $(isodir)/memory_manager.elf: rust_build
 	cp target/$(target)/$(config)/micros_memory_manager $@
