@@ -69,6 +69,14 @@ There's nothing in micros to use. The OS doesn't yet support any kind of user in
 
 * The memory manager will be launched in user mode but will have all of the devices physical memory identity mapped into its address space.
 
+## Repository branches
+
+* master contains the code that was used to build the latest release and is only updated when a new release occurs.
+
+* staging is the branch that new releases are built from. It is typically updated shortly before new release.
+
+* develop is the branch where active development occurs.
+
 ## Steps to 1.0
 
 I'm not sure what all I'll require before calling something a 1.0 release, but it will be at least the following:
