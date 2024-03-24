@@ -31,7 +31,7 @@ The newly built image will be at `build/micros-amd64.iso`.
 
 This list may be incomplete:
 
-* Make
+* make
 * nasm
 * rustc
 * cargo
