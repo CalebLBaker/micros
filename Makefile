@@ -24,6 +24,11 @@ kernel := target/$(target)/$(config)/libmicros_kernel.a
 
 all: $(iso)
 
+release: release/micros-$(arch).iso
+
+release/micros-$(arch).iso: $(iso)
+	cp $(iso) $@
+
 build/tmp.crt: build
 	openssl req -newkey rsa:4096 -nodes -keyout build/tmp.key -new -x509 -sha256 -days 36500 -subj "/CN=Temporary Dev Micros Key/" -out $@
 
