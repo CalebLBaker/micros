@@ -71,14 +71,6 @@ There's nothing in micros to use. The OS doesn't yet support any kind of user in
 
 ## Changelog
 
-### v0.1.0 (2024-03-13)
-
-First Pre-release.
-
-Kernel boots from a multiboot2-compliant bootloader and then launches the memory manager.
-
-Memory manager prints "Hello, world" to the screen to give some indication that something has worked.
-
 ### v0.2.0 (2024-03-22)
 
 Start in video graphics mode rather than text mode in order to support more modern UEFI firmwares that don't support legacy text mode.
@@ -86,4 +78,12 @@ Start in video graphics mode rather than text mode in order to support more mode
 Turn the whole screen white instead of printing "Hello, world" because that's easier when you're not in text mode.
 
 Make release image compatible with UEFI Secure Boot (and propery embed kernel hash in bootloader so that secure boot isn't pointless).
+
+### v0.1.0 (2024-03-13)
+
+First Pre-release.
+
+Kernel boots from a multiboot2-compliant bootloader and then launches the memory manager.
+
+Memory manager prints "Hello, world" to the screen to give some indication that something has worked.
 
