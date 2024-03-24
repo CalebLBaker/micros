@@ -69,6 +69,20 @@ There's nothing in micros to use. The OS doesn't yet support any kind of user in
 
 * The memory manager will be launched in user mode but will have all of the devices physical memory identity mapped into its address space.
 
+## Steps to 1.0
+
+I'm not sure what all I'll require before calling something a 1.0 release, but it will be at least the following:
+
+* True user space processes that don't require special privileges
+
+* Multiprocessing
+
+* A file system
+
+* User interaction (IO)
+
+* A working libc
+
 ## Changelog
 
 ### v0.2.0 (2024-03-22)
