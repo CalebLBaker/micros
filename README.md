@@ -40,6 +40,16 @@ git submodule init
 git submodule update
 ```
 
+##### Dependencies only needed for supply chain auditing
+```bash
+cargo install cargo-audit
+```
+
+##### Dependencies only needed for running in an emulaator
+```bash
+sudo pacman -S qemu-desktop
+```
+
 ### Build Instructions
 
 Run `make` from the root of the repository and then a bootable ISO file will be at `build/micros-amd64.iso`.
