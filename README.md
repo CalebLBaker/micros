@@ -27,20 +27,18 @@ If you add `release/micros.crt` as a DB key in your devices firmware then the re
 Alternatively, you may build an image signed with a key that you've already added in your firmware by editing `Makefile` to set the `key` and `cert` variables to point at your key and certificate and then running `make`.
 The newly built image will be at `build/micros-amd64.iso`.
 
-### Build Dependencies
+### Installing Build Dependencies
 
-This list may be incomplete:
+#### Arch Linux
 
-* make
-* nasm
-* rustc
-* cargo
-* cargo-about
-* lld
-* openssl
-* sbsigntools
-* mtools
-* xorriso
+```bash
+sudo pacman -S core-devel nasm rustup lld mtools libisoburn openssl sbsigntools
+rustup component add rust-src --toolchain nightly-x86_64-unknown-linux-gnu
+cargo install cargo-about
+cd $(MICROS_REPO_ROOT)
+git submodule init
+git submodule update
+```
 
 ### Build Instructions
 
