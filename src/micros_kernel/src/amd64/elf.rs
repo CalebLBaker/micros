@@ -1,9 +1,8 @@
 use crate::{ExecutableHeader, SegmentFlags, SegmentHeader};
 use core::mem::size_of;
 
-#[allow(clippy::module_name_repetitions)]
 #[repr(C)]
-pub struct ElfHeader {
+pub struct Header {
     ident_magic: u32,
     ident_width_class: u8,
     ident_data_endianness: u8,
@@ -24,7 +23,7 @@ pub struct ElfHeader {
     program_header_offset: u64,
     section_header_offset: u64,
     flags: u32,
-    elf_header_size: u16,
+    size: u16,
     program_header_entry_size: u16,
     program_header_num: u16,
     section_header_entry_size: u16,
@@ -32,10 +31,12 @@ pub struct ElfHeader {
     shstrndx: u16,
 }
 
+// This code is explicitly only enabled for 64 bit processors, so casting from u64 to usize is
+// safe here.
 #[allow(clippy::cast_possible_truncation)]
-impl ExecutableHeader for ElfHeader {
+impl ExecutableHeader for Header {
     fn is_valid(&self, file_size: usize) -> bool {
-        size_of::<ElfHeader>() <= file_size
+        size_of::<Header>() <= file_size
             && self.ident_magic == ELF_MAGIC_NUMBER
             && self.ident_width_class == ELF_64_BIT
             && self.ident_data_endianness == ELF_LITTLE_ENDIAN
@@ -72,6 +73,8 @@ pub struct ProgramHeader {
     align: u64,
 }
 
+// This code is explicitly only enabled for 64 bit processors, so casting from u64 to usize is
+// safe here.
 #[allow(clippy::cast_possible_truncation)]
 impl SegmentHeader for ProgramHeader {
     fn offset(&self) -> usize {

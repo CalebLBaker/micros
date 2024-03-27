@@ -1,5 +1,3 @@
-#![allow(clippy::struct_field_names)]
-
 mod apic;
 mod elf;
 mod init;

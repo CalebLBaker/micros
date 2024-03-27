@@ -12,7 +12,7 @@ use core::{
     ptr::{addr_of, addr_of_mut},
     slice,
 };
-use elf::{ElfHeader, ProgramHeader};
+use elf::ProgramHeader;
 use frame_allocation::{
     amd64::{Amd64FrameAllocator, FOUR_KILOBYTES, GIGABYTE},
     end_of_last_full_page, first_full_page_address, FfiOption, FrameAllocator,
@@ -105,6 +105,8 @@ struct Amd64 {
 }
 
 impl Amd64 {
+    // This code is explicitly only enabled for 64 bit processors, so casting from u64 to usize is
+    // safe here.
     #[allow(clippy::cast_possible_truncation)]
     unsafe fn copy_into_address_space(
         &mut self,
@@ -159,7 +161,7 @@ impl Architecture for Amd64 {
 
     type PageTable = PageTable;
 
-    type ExecutableHeader = ElfHeader;
+    type ExecutableHeader = elf::Header;
 
     type SegmentHeader = ProgramHeader;
 
