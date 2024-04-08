@@ -1,5 +1,4 @@
 #![no_std]
-#![feature(pointer_is_aligned)]
 #![allow(clippy::missing_errors_doc)]
 #![allow(clippy::missing_safety_doc)]
 
