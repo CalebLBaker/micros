@@ -50,6 +50,25 @@ cargo install cargo-audit
 sudo pacman -S qemu-desktop
 ```
 
+#### Debian
+
+```bash
+sudo apt install curl nasm lld mtools sbsigntools xorriso
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+rustup component add rust-src --toolchain nightly-x86_64-unknown-linux-gnu
+cargo install cargo-about
+```
+
+##### Dependencies only needed for supply chain auditing
+```bash
+cargo install cargo-audit
+```
+
+##### Dependencies only needed for running in an emulaator
+```bash
+sudo apt install qemu-system-x86
+```
+
 ### Build Instructions
 
 Run `make` from the root of the repository and then a bootable ISO file will be at `build/micros-amd64.iso`.
@@ -98,22 +117,4 @@ I'm not sure what all I'll require before calling something a 1.0 release, but i
 * User interaction (IO)
 
 * A working libc
-
-## Changelog
-
-### v0.2.0 (2024-03-22)
-
-Start in video graphics mode rather than text mode in order to support more modern UEFI firmwares that don't support legacy text mode.
-
-Turn the whole screen white instead of printing "Hello, world" because that's easier when you're not in text mode.
-
-Make release image compatible with UEFI Secure Boot (and propery embed kernel hash in bootloader so that secure boot isn't pointless).
-
-### v0.1.0 (2024-03-13)
-
-First Pre-release.
-
-Kernel boots from a multiboot2-compliant bootloader and then launches the memory manager.
-
-Memory manager prints "Hello, world" to the screen to give some indication that something has worked.
 
