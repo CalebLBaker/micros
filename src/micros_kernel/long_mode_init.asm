@@ -26,18 +26,18 @@ long_mode_start:
 ; rdx: physical address of root page table for memory manager
 ; rcx: virtual address of memory manager main function
 launch_memory_manager:
-	mov cr3, rdx
-	mov rsp, 0
-	mov ax, USER_DATA_SEGMENT
-	mov ds, ax
-	mov es, ax
-	mov fs, ax
-	mov gs, ax
+    mov cr3, rdx
+    mov rsp, 0
+    mov ax, USER_DATA_SEGMENT
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
 
-	push USER_DATA_SEGMENT
-	push 0
-	pushf
-	push USER_CODE_SEGMENT
-	push rcx
-	iretq
+    push USER_DATA_SEGMENT
+    push 0
+    pushf
+    push USER_CODE_SEGMENT
+    push rcx
+    iretq
 

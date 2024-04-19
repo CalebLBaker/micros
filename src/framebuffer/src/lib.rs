@@ -1,5 +1,4 @@
 #![no_std]
-#![feature(pointer_is_aligned)]
 #![allow(clippy::missing_safety_doc)]
 
 use core::{mem::size_of, slice};

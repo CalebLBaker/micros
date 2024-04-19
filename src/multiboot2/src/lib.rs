@@ -1,6 +1,4 @@
 #![no_std]
-#![feature(pointer_is_aligned)]
-#![feature(slice_split_at_unchecked)]
 #![allow(clippy::missing_errors_doc)]
 #![allow(clippy::missing_safety_doc)]
 
@@ -10,27 +8,37 @@ use core::{
     slice, str,
 };
 
+/// The value of the `region_type` field for `MemoryMapEntry`'s that represent available memory.
 pub const AVAILABLE_MEMORY: u32 = 1;
+/// The value of the `region_type` field for `MemoryMapEntry`'s that represent ACPI memory.
 pub const ACPI_MEMORY: u32 = 3;
 
+/// A type that can represent a tag from the multiboot2 boot information structure.
 pub trait MutibootTag<'a>: TryFrom<&'a [u8]> {
     const TAG_TYPE: u32;
 }
 
+/// The header that is present at the beginning of the multiboot2 information structure.
 #[repr(C, align(8))]
 pub struct BootInformationHeader {
+    /// The size of the boot information structure in bytes.
     pub total_size: u32,
     reserved: u32,
 }
 
+/// An entry in the memory map that represents a region of memory
 #[repr(C)]
 pub struct MemoryMapEntry {
+    /// The address of the memory region
     pub base_addr: u64,
+    /// The size of the memory region in bytes
     pub length: u64,
+    /// The type of memory in the region (e.g. available memory or ACPI memory)
     pub region_type: u32,
     reserved: u32,
 }
 
+/// A multiboot2 tag containing a map of the device's memory
 #[derive(Clone, Copy)]
 pub struct MemoryMapTag<'a> {
     pub entries: &'a [MemoryMapEntry],
@@ -74,9 +82,13 @@ impl<'a> MutibootTag<'a> for MemoryMapTag<'a> {
     const TAG_TYPE: u32 = 6;
 }
 
+/// A multiboot2 info tag describing a boot module
 pub struct BootModuleTag<'a> {
+    /// The address of the start of the boot module
     pub mod_start: u32,
+    /// The address of the end of the boot module
     pub mod_end: u32,
+    /// A string value affiliated with the boot module
     pub string: &'a str,
 }
 
@@ -111,13 +123,22 @@ impl<'a> MutibootTag<'a> for BootModuleTag<'a> {
     const TAG_TYPE: u32 = 3;
 }
 
+/// A multiboot2 info tag containing information about the framebuffer
 pub struct FramebufferTag<'a> {
+    /// A pointer to the framebuffer
     pub framebuffer: *mut u8,
+    /// The size of a row in the framebuffer in bytes
     pub pitch: u32,
+    /// The size of a row in the framebuffer in pixels
     pub width: u32,
+    /// The number of rows in the framebuffer
     pub height: u32,
+    /// The size of a pixel in bits
     pub bits_per_pixel: u8,
+    /// The type of framebuffer.
     pub framebuffer_type: u8,
+    /// Data about the framebuffer's color format. The layout of this data depends on the
+    /// framebuffer type
     pub color_data: &'a [u8],
 }
 
@@ -149,11 +170,13 @@ impl<'a> MutibootTag<'a> for FramebufferTag<'a> {
     const TAG_TYPE: u32 = 8;
 }
 
+/// A multiboot2 boot info tag
 pub struct BootInfoTag<'a> {
     tag_type: u32,
     data: &'a [u8],
 }
 
+/// Boot information provided to the operating system by the boot loader
 #[derive(Clone, Copy)]
 pub struct BootInformation<'a> {
     pub tags: &'a [u8],

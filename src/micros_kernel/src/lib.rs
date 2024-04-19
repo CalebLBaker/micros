@@ -1,7 +1,6 @@
 #![no_std]
 #![deny(clippy::all)]
 #![deny(clippy::pedantic)]
-#![allow(clippy::missing_errors_doc)]
 #![feature(abi_x86_interrupt)]
 
 #[cfg(target_arch = "x86_64")]
