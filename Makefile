@@ -4,7 +4,7 @@ target ?= x86_64-unknown-none
 iso := build/micros-$(arch).iso
 
 # Keys used for signing actual binary releases (private key is stored securely outside of the repository)
-key := /home/caleb/private/db.key
+key := /home/caleb/keys/db.key
 cert := release/micros.crt
 
 # Keys generated for convenience in development and testing
