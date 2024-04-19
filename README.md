@@ -90,9 +90,9 @@ There's nothing in micros to use. The OS doesn't yet support any kind of user in
 
 * The kernel will invoke the memory manager's main entry function and pass in two parameters.
 
-	- The first parameter is a pointer to a `Amd64FrameAllocator` structure as described in the `amd64` module of the `src/frame_allocation` crate. This will contain all of the memory frames that are not in use at the time the memory manager is launched.
+    - The first parameter is a pointer to a `Amd64FrameAllocator` structure as described in the `amd64` module of the `src/frame_allocation` crate. This will contain all of the memory frames that are not in use at the time the memory manager is launched.
 
-	- The second parameter is a pointer to the multiboot2 boot information structure.
+    - The second parameter is a pointer to the multiboot2 boot information structure.
 
 * The memory manager will be launched in user mode but will have all of the devices physical memory identity mapped into its address space.
 

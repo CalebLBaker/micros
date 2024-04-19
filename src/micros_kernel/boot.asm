@@ -39,17 +39,17 @@ header_start:
     ; checksum
     dd -(MULTIBOOT_2 + X86 + HEADER_LENGTH)
 
-	; module alignment tag
-	dw MODULE_ALIGNMENT_TAG ; type
-	dw 0 ; flags
-	dd 8 ; size
+    ; module alignment tag
+    dw MODULE_ALIGNMENT_TAG ; type
+    dw 0 ; flags
+    dd 8 ; size
 
-	dw FRAMEBUFFER_TAG
-	dw 0
-	dd 20
-	dw 1366
-	dw 768
-	dw 32
+    dw FRAMEBUFFER_TAG
+    dw 0
+    dd 20
+    dw 1366
+    dw 768
+    dw 32
 
     ; required end tag
     dw MULTIBOOT_END_TAG ; type
@@ -79,7 +79,7 @@ p3_table_for_stack:
 p2_table_for_stack:
     resb PAGE_SIZE
 p1_table_for_stack:
-	resb PAGE_SIZE
+    resb PAGE_SIZE
 
 section .rodata
 gdt64:
@@ -106,7 +106,7 @@ _start:
     pop eax
     mov ecx, eax
     xor eax, CPUID_BIT
-	and eax, CLEAR_IO_PRIVELEGE_LEVEL
+    and eax, CLEAR_IO_PRIVELEGE_LEVEL
     push eax
     popfd
     pushfd
@@ -137,9 +137,9 @@ _start:
     or eax, PAGE_TABLE_FLAGS
     mov [p4_table], eax
 
-	; Test for GB page support
-	test esi, GIGABYTE_PAGES_CPUID_BIT
-	jz .map_p3_table_no_gigabyte_pages
+    ; Test for GB page support
+    test esi, GIGABYTE_PAGES_CPUID_BIT
+    jz .map_p3_table_no_gigabyte_pages
 
     ; Set up p3 table with 4 entries
     mov eax, PAGE_FLAGS
@@ -153,27 +153,27 @@ _start:
 
 .done_mapping_low_page_tables:
 
-	; Map the stack to high memory with nothing mapped directly below it
-	; so that stack overflows will trigger page faults
-	mov eax, p3_table_for_stack
-	or eax, PAGE_TABLE_FLAGS
-	mov [p4_table + LAST_PAGE_TABLE_ENTRY], eax
+    ; Map the stack to high memory with nothing mapped directly below it
+    ; so that stack overflows will trigger page faults
+    mov eax, p3_table_for_stack
+    or eax, PAGE_TABLE_FLAGS
+    mov [p4_table + LAST_PAGE_TABLE_ENTRY], eax
 
-	mov eax, p2_table_for_stack
-	or eax, PAGE_TABLE_FLAGS
-	mov [p3_table_for_stack + LAST_PAGE_TABLE_ENTRY], eax
+    mov eax, p2_table_for_stack
+    or eax, PAGE_TABLE_FLAGS
+    mov [p3_table_for_stack + LAST_PAGE_TABLE_ENTRY], eax
 
-	mov eax, p1_table_for_stack
-	or eax, PAGE_TABLE_FLAGS
-	mov [p2_table_for_stack + LAST_PAGE_TABLE_ENTRY], eax
+    mov eax, p1_table_for_stack
+    or eax, PAGE_TABLE_FLAGS
+    mov [p2_table_for_stack + LAST_PAGE_TABLE_ENTRY], eax
 
-	mov eax, stack_bottom
-	or eax, PAGE_TABLE_FLAGS
-	mov [p1_table_for_stack + LAST_PAGE_TABLE_ENTRY - PAGE_TABLE_ENTRY_SIZE], eax
+    mov eax, stack_bottom
+    or eax, PAGE_TABLE_FLAGS
+    mov [p1_table_for_stack + LAST_PAGE_TABLE_ENTRY - PAGE_TABLE_ENTRY_SIZE], eax
 
-	mov eax, stack_bottom + PAGE_SIZE
-	or eax, PAGE_TABLE_FLAGS
-	mov [p1_table_for_stack + LAST_PAGE_TABLE_ENTRY], eax
+    mov eax, stack_bottom + PAGE_SIZE
+    or eax, PAGE_TABLE_FLAGS
+    mov [p1_table_for_stack + LAST_PAGE_TABLE_ENTRY], eax
 
     ; load p4 to cr3
     mov eax, p4_table

@@ -32,7 +32,7 @@ SECTIONS
 
     .kernelend : ALIGN(4K)
     {
-		*(.kernelend)
+        *(.kernelend)
     }
 }
 
