@@ -53,10 +53,12 @@ sudo pacman -S qemu-desktop
 #### Debian
 
 ```bash
-sudo apt install curl nasm lld mtools sbsigntools xorriso
+sudo apt install curl nasm lld mtools sbsigntool xorriso
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 rustup component add rust-src --toolchain nightly-x86_64-unknown-linux-gnu
 cargo install cargo-about
+git submodule init
+git submodule update
 ```
 
 ##### Dependencies only needed for supply chain auditing
