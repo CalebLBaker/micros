@@ -1,5 +1,6 @@
 arch ?= amd64
 config ?= release
+profile ?= $(config)
 target ?= x86_64-unknown-none
 iso := build/micros-$(arch).iso
 
@@ -50,7 +51,7 @@ check: $(image) rust_build
 	cargo audit
 
 rust_build:
-	cargo build --target src/$(target).json --release
+	cargo build --target src/$(target).json --profile=$(profile)
 
 iso: $(iso)
 
