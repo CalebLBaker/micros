@@ -14,5 +14,3 @@ multiboot2 = { path = "../multiboot2" }
 
 [target.'cfg(target_arch = "x86_64")'.dependencies]
 x86_64 = "0.15.1"
-x2apic = "0.4.3"
-spin = "0.9.8"

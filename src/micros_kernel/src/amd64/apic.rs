@@ -1,34 +1,27 @@
-use spin::Mutex;
-use core::ops::DerefMut;
-use x2apic::lapic::{xapic_base, LocalApic, LocalApicBuilder};
-use x86_64::instructions::port::Port;
+use x86_64::{instructions::port::Port, registers::model_specific::Msr};
+
+pub const LOCAL_APIC_START: usize = 0xFEE0_0000;
+pub const LOCAL_APIC_END: usize = 0xFEE0_1000;
 
 #[derive(Debug, Clone, Copy)]
 #[repr(u8)]
 pub enum InterruptIndex {
     Error = APIC_OFFSET,
-    Spurious,
     Timer,
+    Spurious = SPURIOUS_INTERRUPT_VECTOR_INDEX,
 }
 
-pub unsafe fn init() -> Option<()> {
+pub unsafe fn init() {
     disable_pic(MASTER_PIC, MASTER_PIC_OFFSET, SLAVE_PICS_MASK);
     disable_pic(SLAVE_PIC, SLAVE_PIC_OFFSET, SLAVE_PIC_IDENTITY);
-    let mut apic_option = LOCAL_APIC.lock();
-    *apic_option = create_apic_builder()
-        .set_xapic_base(xapic_base())
-        .build()
-        .ok();
-    let apic = apic_option.deref_mut().as_mut()?;
-    apic.enable();
-    apic.disable_timer();
-    Some(())
+    Msr::new(APIC_BASE_MODEL_SPECIFIC_REGISTER).write(APIC_BASE);
+    TIMER_REGISTER.write_volatile(TIMER_REGISTER_VALUE);
+    ERROR_REGISTER.write_volatile(InterruptIndex::Error as u8);
+    SPURIOUS_INTERRUPT_REGISTER.write_volatile(SPURIOUS_INTERRUPT_REGISTER_VALUE);
 }
 
 pub unsafe fn end_interrupt() {
-    if let Some(apic) = LOCAL_APIC.lock().as_mut() {
-        apic.end_of_interrupt();
-    }
+    END_OF_INTERRUPT.write_volatile(0);
 }
 
 unsafe fn disable_pic(base_port_number: u16, vector_offset: u8, icw3: u8) {
@@ -52,14 +45,14 @@ const MASTER_PIC_OFFSET: u8 = 0x20;
 const SLAVE_PIC_OFFSET: u8 = 0x28;
 const APIC_OFFSET: u8 = 0x30;
 
-static LOCAL_APIC: Mutex<Option<LocalApic>> = Mutex::new(None);
+const SPURIOUS_INTERRUPT_VECTOR_INDEX: u8 = 0xFF;
+const SPURIOUS_INTERRUPT_REGISTER_VALUE: u32 = 0x1FF;
+const TIMER_REGISTER_VALUE: u32 = 0x10000 | InterruptIndex::Timer as u32;
+const APIC_BASE: u64 = 0xFEE0_0800;
+const SPURIOUS_INTERRUPT_REGISTER: *mut u32 = 0xFEE0_00F0 as *mut u32;
+const TIMER_REGISTER: *mut u32 = 0xFEE0_0320 as *mut u32;
+const ERROR_REGISTER: *mut u8 = 0xFEE0_0370  as *mut u8;
+const END_OF_INTERRUPT: *mut u32 = 0xFEE0_00B0 as *mut u32;
 
-fn create_apic_builder() -> LocalApicBuilder {
-    let mut apic_builder = LocalApicBuilder::new();
-    apic_builder
-        .timer_vector(InterruptIndex::Timer as usize)
-        .error_vector(InterruptIndex::Error as usize)
-        .spurious_vector(InterruptIndex::Spurious as usize);
-    apic_builder
-}
+const APIC_BASE_MODEL_SPECIFIC_REGISTER: u32 = 0x1B;
 

@@ -92,6 +92,7 @@ struct ProcessLaunchInfo {
 unsafe fn boot_os<Proc: Architecture>(
     proc: &mut Proc,
     multiboot_info_ptr: *const u8,
+    architecture_specific_reserved_memory: Range<usize>,
 ) -> Option<ProcessLaunchInfo> {
     // Initialize available memory and set up page tables
     let boot_info = BootInformation::new(multiboot_info_ptr);
@@ -105,17 +106,18 @@ unsafe fn boot_os<Proc: Architecture>(
         addr_of!(header_start) as usize..addr_of!(kernel_end) as usize,
         boot_info.address_range(),
         memory_manager_bounds.clone(),
+        architecture_specific_reserved_memory.clone(),
         0..0,
     ];
     let memory_regions_in_use = if let Some(framebuffer_tag) =
         boot_info.tags_of_type::<FramebufferTag>().next()
     {
         let framebuffer_addr = framebuffer_tag.framebuffer as usize;
-        memory_regions_in_use_arr[3] = framebuffer_addr
+        memory_regions_in_use_arr[4] = framebuffer_addr
             ..framebuffer_addr + (framebuffer_tag.height as usize * framebuffer_tag.pitch as usize);
         &mut memory_regions_in_use_arr
     } else {
-        &mut memory_regions_in_use_arr[0..3]
+        &mut memory_regions_in_use_arr[0..4]
     };
     let available_memory_regions =
         unused_memory_regions(memory_regions_in_use, Proc::INITIAL_VIRTUAL_MEMORY_SIZE)?;

@@ -6,7 +6,7 @@ use crate::{
     },
     boot_os, copy_and_zero_fill, slice_with_bounds_check, Architecture, SegmentFlags,
 };
-use apic::InterruptIndex;
+use apic::{InterruptIndex, LOCAL_APIC_START, LOCAL_APIC_END};
 use core::{
     ops::Range,
     ptr::{addr_of, addr_of_mut},
@@ -45,13 +45,8 @@ pub unsafe fn initialize_operating_system(multiboot_info_ptr: u32, cpu_info: u32
     IDT.page_fault.set_handler_fn(page_fault_handler);
     set_interrupt_handlers(&mut *addr_of_mut!(IDT));
     IDT.load();
-    apic::init()?;
+    apic::init();
     interrupts::enable();
-
-    // Without this line the double fault handler triggers a page fault and I have no idea why
-    // I've tried flushing the translation lookaside buffer and that doesn't appear to have any
-    // affect
-    DOUBLE_FAULT_STACK_BOTTOM.write_volatile(0xff);
 
     let proc = &mut *addr_of_mut!(PROC);
     if supports_gigabyte_pages(cpu_info) {
@@ -64,7 +59,7 @@ pub unsafe fn initialize_operating_system(multiboot_info_ptr: u32, cpu_info: u32
         proc.allocator.gigabyte_pages = FfiOption::Some(FrameAllocator::default());
     }
     let boot_info_ptr = multiboot_info_ptr as *const u8;
-    let memory_manager_launch_info = boot_os(proc, boot_info_ptr)?;
+    let memory_manager_launch_info = boot_os(proc, boot_info_ptr, LOCAL_APIC_START..LOCAL_APIC_END)?;
 
     launch_memory_manager(
         addr_of_mut!(proc.allocator),
@@ -95,7 +90,6 @@ const GIGABYTE_PAGES_CPUID_BIT: u32 = 0x400_0000;
 const DOUBLE_FAULT_IST_INDEX: u16 = 0;
 const DOUBLE_FAULT_STACK_SIZE: usize = FOUR_KILOBYTES;
 
-const DOUBLE_FAULT_STACK_BOTTOM: *mut u8 = 0xffff_ffff_ffe0_1000 as *mut u8;
 const DOUBLE_FAULT_STACK_TOP: VirtAddr = VirtAddr::new_truncate(0xffff_ffff_ffe0_2000);
 
 const INTERRUPT_STACK_BOTTOM: VirtAddr = VirtAddr::new_truncate(0xffff_ffff_fff0_1000);
