@@ -1,12 +1,13 @@
 use crate::{
+    Architecture, SegmentFlags,
     amd64::{
         apic, breakpoint_handler, double_fault_handler, elf, error_interrupt_handler,
         launch_memory_manager, p1_table_for_stack, p2_tables, p4_table, page_fault_handler,
         spurious_interrupt_handler, timer_interrupt_handler,
     },
-    boot_os, copy_and_zero_fill, slice_with_bounds_check, Architecture, SegmentFlags,
+    boot_os, copy_and_zero_fill, slice_with_bounds_check,
 };
-use apic::{InterruptIndex, LOCAL_APIC_START, LOCAL_APIC_END};
+use apic::{InterruptIndex, LOCAL_APIC_END, LOCAL_APIC_START};
 use core::{
     ops::Range,
     ptr::{addr_of, addr_of_mut},
@@ -14,59 +15,64 @@ use core::{
 };
 use elf::ProgramHeader;
 use frame_allocation::{
+    FfiOption, FrameAllocator,
     amd64::{Amd64FrameAllocator, FOUR_KILOBYTES, GIGABYTE},
-    end_of_last_full_page, first_full_page_address, FfiOption, FrameAllocator,
+    end_of_last_full_page, first_full_page_address,
 };
 use x86_64::{
+    VirtAddr,
     addr::PhysAddr,
     instructions::{interrupts, tables::load_tss},
-    registers::segmentation::{Segment, SegmentSelector, CS},
+    registers::segmentation::{CS, Segment, SegmentSelector},
     structures::{
         gdt::{Descriptor, GlobalDescriptorTable},
         idt::InterruptDescriptorTable,
         paging::page_table::{PageTable, PageTableEntry, PageTableFlags},
         tss::TaskStateSegment,
     },
-    VirtAddr,
 };
 
 pub unsafe fn initialize_operating_system(multiboot_info_ptr: u32, cpu_info: u32) -> Option<()> {
-    p1_table_for_stack[0x001].set_addr(
-        PhysAddr::new_truncate(addr_of!(DOUBLE_FAULT_STACK) as u64),
-        PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::NO_EXECUTE,
-    );
+    unsafe {
+        p1_table_for_stack[0x001].set_addr(
+            PhysAddr::new_truncate(addr_of!(DOUBLE_FAULT_STACK) as u64),
+            PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::NO_EXECUTE,
+        );
 
-    let segment_selectors = load_gdt(&mut *addr_of_mut!(GDT), &mut *addr_of_mut!(TSS));
-    CS::set_reg(segment_selectors.code_selector);
-    load_tss(segment_selectors.tss_selector);
-    IDT.breakpoint.set_handler_fn(breakpoint_handler);
-    let double_fault_interrupt = IDT.double_fault.set_handler_fn(double_fault_handler);
-    double_fault_interrupt.set_stack_index(DOUBLE_FAULT_IST_INDEX);
-    IDT.page_fault.set_handler_fn(page_fault_handler);
-    set_interrupt_handlers(&mut *addr_of_mut!(IDT));
-    IDT.load();
-    apic::init();
-    interrupts::enable();
+        let segment_selectors = load_gdt(&mut *addr_of_mut!(GDT), &mut *addr_of_mut!(TSS));
+        CS::set_reg(segment_selectors.code_selector);
+        load_tss(segment_selectors.tss_selector);
+        let idt_ref = &mut *{ (&raw mut IDT) };
+        idt_ref.breakpoint.set_handler_fn(breakpoint_handler);
+        let double_fault_interrupt = idt_ref.double_fault.set_handler_fn(double_fault_handler);
+        double_fault_interrupt.set_stack_index(DOUBLE_FAULT_IST_INDEX);
+        idt_ref.page_fault.set_handler_fn(page_fault_handler);
+        set_interrupt_handlers(idt_ref);
+        idt_ref.load();
+        apic::init();
+        interrupts::enable();
 
-    let proc = &mut *addr_of_mut!(PROC);
-    if supports_gigabyte_pages(cpu_info) {
-        proc.allocator
-            .four_kilobyte_pages
-            .add_frame(addr_of!(p2_tables[0]) as usize);
-        proc.allocator
-            .four_kilobyte_pages
-            .add_frame(addr_of!(p2_tables[1]) as usize);
-        proc.allocator.gigabyte_pages = FfiOption::Some(FrameAllocator::default());
+        let proc = &mut *addr_of_mut!(PROC);
+        if supports_gigabyte_pages(cpu_info) {
+            proc.allocator
+                .four_kilobyte_pages
+                .add_frame(addr_of!(p2_tables[0]) as usize);
+            proc.allocator
+                .four_kilobyte_pages
+                .add_frame(addr_of!(p2_tables[1]) as usize);
+            proc.allocator.gigabyte_pages = FfiOption::Some(FrameAllocator::default());
+        }
+        let boot_info_ptr = multiboot_info_ptr as *const u8;
+        let memory_manager_launch_info =
+            boot_os(proc, boot_info_ptr, LOCAL_APIC_START..LOCAL_APIC_END)?;
+
+        launch_memory_manager(
+            addr_of_mut!(proc.allocator),
+            boot_info_ptr,
+            memory_manager_launch_info.root_page_table_address,
+            memory_manager_launch_info.entry_point,
+        );
     }
-    let boot_info_ptr = multiboot_info_ptr as *const u8;
-    let memory_manager_launch_info = boot_os(proc, boot_info_ptr, LOCAL_APIC_START..LOCAL_APIC_END)?;
-
-    launch_memory_manager(
-        addr_of_mut!(proc.allocator),
-        boot_info_ptr,
-        memory_manager_launch_info.root_page_table_address,
-        memory_manager_launch_info.entry_point,
-    );
 }
 
 static mut IDT: InterruptDescriptorTable = InterruptDescriptorTable::new();
@@ -114,9 +120,9 @@ impl Amd64 {
         let mut data_offset = 0;
         for entry in page_table_entries(page_table, page_table_level, address, size) {
             let page = if entry.is_unused() {
-                let page_address = self.allocator.get_4k_frame()?;
+                let page_address = unsafe { self.allocator.get_4k_frame() }?;
                 set_page_table_entry(entry, page_address, flags);
-                (page_address as *mut u8).write_bytes(0, FOUR_KILOBYTES);
+                unsafe { (page_address as *mut u8).write_bytes(0, FOUR_KILOBYTES) };
                 page_address
             } else {
                 update_page_table_entry_flags(entry, flags);
@@ -129,19 +135,23 @@ impl Amd64 {
 
             if page_table_level == 0 || entry.flags().contains(PageTableFlags::HUGE_PAGE) {
                 copy_and_zero_fill(
-                    slice::from_raw_parts_mut((page + page_offset) as *mut u8, bytes_for_page),
+                    unsafe {
+                        slice::from_raw_parts_mut((page + page_offset) as *mut u8, bytes_for_page)
+                    },
                     data_for_entry,
                 );
             } else {
-                let sub_page_table = &mut *(page as *mut PageTable);
-                self.copy_into_address_space(
-                    page_table_level - 1,
-                    sub_page_table,
-                    address,
-                    data_for_entry,
-                    bytes_for_page,
-                    flags,
-                )?;
+                unsafe {
+                    let sub_page_table = &mut *(page as *mut PageTable);
+                    self.copy_into_address_space(
+                        page_table_level - 1,
+                        sub_page_table,
+                        address,
+                        data_for_entry,
+                        bytes_for_page,
+                        flags,
+                    )?;
+                }
             }
             data_offset += bytes_for_page;
             address += bytes_for_page;
@@ -160,69 +170,75 @@ impl Architecture for Amd64 {
     type SegmentHeader = ProgramHeader;
 
     unsafe fn initialize_memory_manager_page_tables(&mut self) -> Option<*mut Self::PageTable> {
-        let root_table_pointer = self.allocator.get_4k_frame()? as *mut PageTable;
-        let root_table = &mut (*root_table_pointer);
-        root_table.zero();
-        root_table[0] = (*addr_of!(p4_table))[0].clone();
+        unsafe {
+            let root_table_pointer = self.allocator.get_4k_frame()? as *mut PageTable;
+            let root_table = &mut (*root_table_pointer);
+            root_table.zero();
+            root_table[0] = (*addr_of!(p4_table))[0].clone();
 
-        let p3_table_addr = self.allocator.get_4k_frame()?;
-        let p3_table = p3_table_addr as *mut PageTable;
-        let flags = user_accessible_page() | PageTableFlags::WRITABLE;
-        set_last_entry(root_table, p3_table_addr, flags);
+            let p3_table_addr = self.allocator.get_4k_frame()?;
+            let p3_table = p3_table_addr as *mut PageTable;
+            let flags = user_accessible_page() | PageTableFlags::WRITABLE;
+            set_last_entry(root_table, p3_table_addr, flags);
 
-        let p2_table_addr = self.allocator.get_4k_frame()?;
-        let p2_table = p2_table_addr as *mut PageTable;
-        clear_and_set_last_entry(&mut *p3_table, p2_table_addr, flags);
+            let p2_table_addr = self.allocator.get_4k_frame()?;
+            let p2_table = p2_table_addr as *mut PageTable;
+            clear_and_set_last_entry(&mut *p3_table, p2_table_addr, flags);
 
-        if let Some(huge_stack) = self.allocator.get_2mb_frame() {
-            clear_and_set_last_entry(
-                &mut *p2_table,
-                huge_stack,
-                flags | PageTableFlags::HUGE_PAGE | PageTableFlags::NO_EXECUTE,
-            );
-        } else {
-            let stack_flags = flags | PageTableFlags::NO_EXECUTE;
+            if let Some(huge_stack) = self.allocator.get_2mb_frame() {
+                clear_and_set_last_entry(
+                    &mut *p2_table,
+                    huge_stack,
+                    flags | PageTableFlags::HUGE_PAGE | PageTableFlags::NO_EXECUTE,
+                );
+            } else {
+                let stack_flags = flags | PageTableFlags::NO_EXECUTE;
+                let p1_table_addr = self.allocator.get_4k_frame()?;
+                let p1_table = p1_table_addr as *mut PageTable;
+                clear_and_set_last_entry(&mut *p2_table, p1_table_addr, flags);
+
+                clear_and_set_last_entry(
+                    &mut *p1_table,
+                    self.allocator.get_4k_frame()?,
+                    stack_flags,
+                );
+                set_entry(
+                    &mut *p1_table,
+                    0x1fd,
+                    self.allocator.get_4k_frame()?,
+                    stack_flags,
+                );
+                set_entry(
+                    &mut *p1_table,
+                    0x1fc,
+                    self.allocator.get_4k_frame()?,
+                    stack_flags,
+                );
+                set_entry(
+                    &mut *p1_table,
+                    0x1fb,
+                    self.allocator.get_4k_frame()?,
+                    stack_flags,
+                );
+            }
+
             let p1_table_addr = self.allocator.get_4k_frame()?;
             let p1_table = p1_table_addr as *mut PageTable;
-            clear_and_set_last_entry(&mut *p2_table, p1_table_addr, flags);
+            set_entry(
+                &mut *p2_table,
+                0x100,
+                p1_table_addr,
+                interrupt_stack_flags(),
+            );
 
-            clear_and_set_last_entry(&mut *p1_table, self.allocator.get_4k_frame()?, stack_flags);
-            set_entry(
+            set_last_entry(
                 &mut *p1_table,
-                0x1fd,
                 self.allocator.get_4k_frame()?,
-                stack_flags,
+                interrupt_stack_flags(),
             );
-            set_entry(
-                &mut *p1_table,
-                0x1fc,
-                self.allocator.get_4k_frame()?,
-                stack_flags,
-            );
-            set_entry(
-                &mut *p1_table,
-                0x1fb,
-                self.allocator.get_4k_frame()?,
-                stack_flags,
-            );
+
+            Some(root_table_pointer)
         }
-
-        let p1_table_addr = self.allocator.get_4k_frame()?;
-        let p1_table = p1_table_addr as *mut PageTable;
-        set_entry(
-            &mut *p2_table,
-            0x100,
-            p1_table_addr,
-            interrupt_stack_flags(),
-        );
-
-        set_last_entry(
-            &mut *p1_table,
-            self.allocator.get_4k_frame()?,
-            interrupt_stack_flags(),
-        );
-
-        Some(root_table_pointer)
     }
 
     unsafe fn register_memory_region(&mut self, memory_region: Range<usize>) {
@@ -230,28 +246,32 @@ impl Architecture for Amd64 {
             let first_gb_page = first_full_page_address(memory_region.start, GIGABYTE);
             let end_of_last_gb_page = end_of_last_full_page(memory_region.end, GIGABYTE);
             if end_of_last_gb_page > first_gb_page {
-                self.allocator
-                    .two_megabyte_pages
-                    .add_aligned_frames_with_scrap_allocator(
-                        &mut self.allocator.four_kilobyte_pages,
-                        memory_region.start..first_gb_page,
-                    );
-                gb_allocator.add_frames(first_gb_page..end_of_last_gb_page);
-                self.allocator
-                    .two_megabyte_pages
-                    .add_aligned_frames_with_scrap_allocator(
-                        &mut self.allocator.four_kilobyte_pages,
-                        end_of_last_gb_page..end_of_last_gb_page,
-                    );
+                unsafe {
+                    self.allocator
+                        .two_megabyte_pages
+                        .add_aligned_frames_with_scrap_allocator(
+                            &mut self.allocator.four_kilobyte_pages,
+                            memory_region.start..first_gb_page,
+                        );
+                    gb_allocator.add_frames(first_gb_page..end_of_last_gb_page);
+                    self.allocator
+                        .two_megabyte_pages
+                        .add_aligned_frames_with_scrap_allocator(
+                            &mut self.allocator.four_kilobyte_pages,
+                            end_of_last_gb_page..end_of_last_gb_page,
+                        );
+                }
                 return;
             }
         }
-        self.allocator
-            .two_megabyte_pages
-            .add_aligned_frames_with_scrap_allocator(
-                &mut self.allocator.four_kilobyte_pages,
-                memory_region.clone(),
-            );
+        unsafe {
+            self.allocator
+                .two_megabyte_pages
+                .add_aligned_frames_with_scrap_allocator(
+                    &mut self.allocator.four_kilobyte_pages,
+                    memory_region.clone(),
+                );
+        }
     }
 
     unsafe fn copy_into_address_space(
@@ -262,7 +282,7 @@ impl Architecture for Amd64 {
         size: usize,
         flags: SegmentFlags,
     ) -> Option<()> {
-        self.copy_into_address_space(3, root_page_table, address, data, size, flags)
+        unsafe { self.copy_into_address_space(3, root_page_table, address, data, size, flags) }
     }
 }
 

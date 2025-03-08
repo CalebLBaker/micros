@@ -184,11 +184,14 @@ pub struct BootInformation<'a> {
 
 impl<'a> BootInformation<'a> {
     pub unsafe fn new(boot_info_ptr: *const u8) -> Self {
-        let boot_info_size = (*(boot_info_ptr as *const BootInformationHeader)).total_size as usize;
-        BootInformation {
-            tags: slice::from_raw_parts(boot_info_ptr, boot_info_size)
-                .split_at_unchecked(size_of::<BootInformationHeader>())
-                .1,
+        unsafe {
+            let boot_info_size =
+                (*(boot_info_ptr as *const BootInformationHeader)).total_size as usize;
+            BootInformation {
+                tags: slice::from_raw_parts(boot_info_ptr, boot_info_size)
+                    .split_at_unchecked(size_of::<BootInformationHeader>())
+                    .1,
+            }
         }
     }
 

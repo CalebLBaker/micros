@@ -2,7 +2,7 @@
 #![allow(clippy::missing_safety_doc)]
 
 use core::{mem::size_of, slice};
-use multiboot2::{aligned_pointer_cast, FramebufferTag};
+use multiboot2::{FramebufferTag, aligned_pointer_cast};
 
 pub enum Framebuffer<'a> {
     IndexedColor(IndexedColorFramebuffer<'a>),
@@ -13,10 +13,9 @@ pub enum Framebuffer<'a> {
 impl<'a> Framebuffer<'a> {
     pub unsafe fn new(tag: FramebufferTag<'a>) -> Option<Self> {
         let core = FramebufferCore {
-            framebuffer: slice::from_raw_parts_mut(
-                tag.framebuffer,
-                tag.pitch as usize * tag.height as usize,
-            ),
+            framebuffer: unsafe {
+                slice::from_raw_parts_mut(tag.framebuffer, tag.pitch as usize * tag.height as usize)
+            },
             pitch: tag.pitch,
             width: tag.width,
             height: tag.height,
@@ -31,10 +30,12 @@ impl<'a> Framebuffer<'a> {
                 } else {
                     Some(Self::IndexedColor(IndexedColorFramebuffer {
                         _core: core,
-                        _color_palette: slice::from_raw_parts(
-                            aligned_pointer_cast::<Rgb>(palette.as_ptr())?,
-                            number_of_colors,
-                        ),
+                        _color_palette: unsafe {
+                            slice::from_raw_parts(
+                                aligned_pointer_cast::<Rgb>(palette.as_ptr())?,
+                                number_of_colors,
+                            )
+                        },
                     }))
                 }
             }
@@ -44,9 +45,11 @@ impl<'a> Framebuffer<'a> {
                 } else {
                     Some(Self::RgbColor(RgbColorFramebuffer {
                         core,
-                        pixel_descriptor: *aligned_pointer_cast::<FramebufferPixelDescriptor>(
-                            tag.color_data.as_ptr(),
-                        )?,
+                        pixel_descriptor: unsafe {
+                            *aligned_pointer_cast::<FramebufferPixelDescriptor>(
+                                tag.color_data.as_ptr(),
+                            )?
+                        },
                     }))
                 }
             }
@@ -87,7 +90,7 @@ impl<'a> StandardRgbFramebuffer<'a> {
     }
 
     pub unsafe fn from_tag(tag: FramebufferTag<'a>) -> Option<Self> {
-        Self::new(Framebuffer::new(tag)?)
+        Self::new(unsafe { Framebuffer::new(tag) }?)
     }
 
     pub fn draw_pixel(&mut self, row: u32, column: u32, color: [u8; 8]) {

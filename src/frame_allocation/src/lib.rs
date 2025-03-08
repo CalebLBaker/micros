@@ -68,7 +68,9 @@ impl<const MEMORY_FRAME_SIZE: usize> FrameAllocator<MEMORY_FRAME_SIZE> {
      */
     pub unsafe fn add_frames(&mut self, memory_area: Range<usize>) {
         for frame in memory_area.step_by(Self::FRAME_SIZE) {
-            self.add_frame(frame);
+            unsafe {
+                self.add_frame(frame);
+            }
         }
     }
 
@@ -83,7 +85,7 @@ impl<const MEMORY_FRAME_SIZE: usize> FrameAllocator<MEMORY_FRAME_SIZE> {
      */
     unsafe fn get_frame(&mut self) -> Option<usize> {
         let ret = self.next?;
-        self.next = (*ret).next;
+        self.next = unsafe { (*ret).next };
         Some(ret as usize)
     }
 
@@ -97,8 +99,10 @@ impl<const MEMORY_FRAME_SIZE: usize> FrameAllocator<MEMORY_FRAME_SIZE> {
      */
     pub unsafe fn add_frame(&mut self, frame_address: usize) {
         let frame_ptr = frame_address as *mut Self;
-        (*frame_ptr).next = self.next;
-        self.next = FfiOption::Some(&mut *frame_ptr);
+        unsafe {
+            (*frame_ptr).next = self.next;
+            self.next = FfiOption::Some(&mut *frame_ptr);
+        }
     }
 
     /**
@@ -119,20 +123,24 @@ impl<const MEMORY_FRAME_SIZE: usize> FrameAllocator<MEMORY_FRAME_SIZE> {
     ) {
         let first_page = first_full_page_address(memory_region.start, Self::FRAME_SIZE);
         let end_of_last_page = end_of_last_full_page(memory_region.end, Self::FRAME_SIZE);
-        if end_of_last_page > first_page {
-            smaller_allocator.add_aligned_frames(memory_region.start..first_page);
-            self.add_frames(first_page..end_of_last_page);
-            smaller_allocator.add_aligned_frames(end_of_last_page..memory_region.end);
-        } else {
-            smaller_allocator.add_aligned_frames(memory_region);
+        unsafe {
+            if end_of_last_page > first_page {
+                smaller_allocator.add_aligned_frames(memory_region.start..first_page);
+                self.add_frames(first_page..end_of_last_page);
+                smaller_allocator.add_aligned_frames(end_of_last_page..memory_region.end);
+            } else {
+                smaller_allocator.add_aligned_frames(memory_region);
+            }
         }
     }
 
     unsafe fn add_aligned_frames(&mut self, memory_region: Range<usize>) {
-        self.add_frames(
-            first_full_page_address(memory_region.start, Self::FRAME_SIZE)
-                ..end_of_last_full_page(memory_region.end, Self::FRAME_SIZE),
-        );
+        unsafe {
+            self.add_frames(
+                first_full_page_address(memory_region.start, Self::FRAME_SIZE)
+                    ..end_of_last_full_page(memory_region.end, Self::FRAME_SIZE),
+            );
+        }
     }
 
     /// Constructs a new empty `FrameAllocator`.

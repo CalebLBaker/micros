@@ -25,7 +25,7 @@ pub fn halt() -> ! {
     }
 }
 
-extern "C" {
+unsafe extern "C" {
     static mut p4_table: PageTable;
     static mut p2_tables: [PageTable; 2];
     static mut p1_table_for_stack: PageTable;
