@@ -1,13 +1,9 @@
 #![no_std]
-#![feature(try_trait_v2)]
 
 #[cfg(target_arch = "x86_64")]
 pub mod amd64;
 
-use core::{
-    convert::Infallible,
-    ops::{ControlFlow, FromResidual, Range, Try},
-};
+use core::ops::Range;
 
 /// Like `Option`, but with a stable ABI so that it can be used in foreign function interfaces.
 #[repr(C)]
@@ -24,27 +20,6 @@ impl<T> FfiOption<T> {
         } else {
             None
         }
-    }
-}
-
-impl<T> Try for FfiOption<T> {
-    type Output = T;
-    type Residual = Option<Infallible>;
-    fn from_output(output: Self::Output) -> Self {
-        Self::Some(output)
-    }
-    fn branch(self) -> ControlFlow<Self::Residual, Self::Output> {
-        if let Self::Some(output) = self {
-            ControlFlow::Continue(output)
-        } else {
-            ControlFlow::Break(None)
-        }
-    }
-}
-
-impl<T> FromResidual<Option<Infallible>> for FfiOption<T> {
-    fn from_residual(_: Option<Infallible>) -> Self {
-        Self::None
     }
 }
 
@@ -84,9 +59,13 @@ impl<const MEMORY_FRAME_SIZE: usize> FrameAllocator<MEMORY_FRAME_SIZE> {
      * allocator previously.
      */
     unsafe fn get_frame(&mut self) -> Option<usize> {
-        let ret = self.next?;
+        if let FfiOption::Some(ret) = self.next {
         self.next = unsafe { (*ret).next };
         Some(ret as usize)
+        }
+        else {
+            None
+        }
     }
 
     /**
