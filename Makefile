@@ -51,7 +51,7 @@ check: $(image) rust_build
 	cargo audit
 
 rust_build:
-	cargo build --target src/$(target).json --profile=$(profile)
+	RUSTFLAGS="-C relocation-model=static" cargo build --target $(target) --profile=$(profile)
 
 iso: $(iso)
 
