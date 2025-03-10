@@ -5,10 +5,7 @@ mod init;
 use core::panic::PanicInfo;
 use frame_allocation::amd64::Amd64FrameAllocator;
 pub use init::initialize_operating_system;
-use x86_64::{
-    instructions::hlt,
-    structures::paging::PageTable,
-};
+use x86_64::{instructions::hlt, structures::paging::PageTable};
 
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
@@ -32,6 +29,14 @@ unsafe extern "C" {
         entry_point: usize,
     ) -> !;
 
+    fn write_port(port: u16, value: u8);
+    fn set_apic_base();
+    fn enable_interrupts();
+    fn load_tss();
+    fn reset_code_segment();
+
+    // These are interrupt handlers that don't actually follow the C calling
+    // convention, so they should not be called from Rust code.
     fn breakpoint_handler();
     fn spurious_interrupt_handler();
     fn error_interrupt_handler();
@@ -39,4 +44,3 @@ unsafe extern "C" {
     fn double_fault_handler();
     fn page_fault_handler();
 }
-

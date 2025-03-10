@@ -1,9 +1,10 @@
 use crate::{
     Architecture, SegmentFlags,
     amd64::{
-        apic, breakpoint_handler, double_fault_handler, elf, error_interrupt_handler,
-        launch_memory_manager, p1_table_for_stack, p2_tables, p4_table, page_fault_handler,
-        spurious_interrupt_handler, timer_interrupt_handler,
+        apic, breakpoint_handler, double_fault_handler, elf, enable_interrupts,
+        error_interrupt_handler, launch_memory_manager, load_tss, p1_table_for_stack, p2_tables,
+        p4_table, page_fault_handler, reset_code_segment, spurious_interrupt_handler,
+        timer_interrupt_handler,
     },
     boot_os, copy_and_zero_fill, slice_with_bounds_check,
 };
@@ -22,8 +23,6 @@ use frame_allocation::{
 use x86_64::{
     VirtAddr,
     addr::PhysAddr,
-    instructions::{interrupts, tables::load_tss},
-    registers::segmentation::{CS, Segment, SegmentSelector},
     structures::{
         gdt::{Descriptor, GlobalDescriptorTable},
         idt::InterruptDescriptorTable,
@@ -42,18 +41,24 @@ pub unsafe fn initialize_operating_system(multiboot_info_ptr: u32, cpu_info: u32
             PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::NO_EXECUTE,
         );
 
-        let segment_selectors = load_gdt(&mut *addr_of_mut!(GDT), &mut *addr_of_mut!(TSS));
-        CS::set_reg(segment_selectors.code_selector);
-        load_tss(segment_selectors.tss_selector);
+        load_gdt(&mut *addr_of_mut!(GDT), &mut *addr_of_mut!(TSS));
+        reset_code_segment();
+        load_tss();
         let idt_ref = &mut *{ (&raw mut IDT) };
-        idt_ref.breakpoint.set_handler_addr(VirtAddr::new(breakpoint_handler as u64));
-        let double_fault_interrupt = idt_ref.double_fault.set_handler_addr(VirtAddr::new(double_fault_handler as u64));
+        idt_ref
+            .breakpoint
+            .set_handler_addr(VirtAddr::new(breakpoint_handler as u64));
+        let double_fault_interrupt = idt_ref
+            .double_fault
+            .set_handler_addr(VirtAddr::new(double_fault_handler as u64));
         double_fault_interrupt.set_stack_index(DOUBLE_FAULT_IST_INDEX);
-        idt_ref.page_fault.set_handler_addr(VirtAddr::new(page_fault_handler as u64));
+        idt_ref
+            .page_fault
+            .set_handler_addr(VirtAddr::new(page_fault_handler as u64));
         set_interrupt_handlers(idt_ref);
         idt_ref.load();
         apic::init();
-        interrupts::enable();
+        enable_interrupts();
 
         let proc = &mut *addr_of_mut!(PROC);
         if supports_gigabyte_pages(cpu_info) {
@@ -289,29 +294,17 @@ impl Architecture for Amd64 {
     }
 }
 
-struct SegmentSelectors {
-    code_selector: SegmentSelector,
-    tss_selector: SegmentSelector,
-}
-
 #[repr(C, align(0x1000))]
 struct DoubleFaultStack([u8; DOUBLE_FAULT_STACK_SIZE]);
 
-fn load_gdt(
-    gdt: &'static mut GlobalDescriptorTable,
-    tss: &'static mut TaskStateSegment,
-) -> SegmentSelectors {
+fn load_gdt(gdt: &'static mut GlobalDescriptorTable, tss: &'static mut TaskStateSegment) {
     tss.interrupt_stack_table[DOUBLE_FAULT_IST_INDEX as usize] = DOUBLE_FAULT_STACK_TOP;
     tss.privilege_stack_table[0] = INTERRUPT_STACK_BOTTOM;
-    let code_selector = gdt.append(Descriptor::kernel_code_segment());
-    let tss_selector = gdt.append(Descriptor::tss_segment(tss));
+    gdt.append(Descriptor::kernel_code_segment());
+    gdt.append(Descriptor::tss_segment(tss));
     gdt.append(Descriptor::user_data_segment());
     gdt.append(Descriptor::user_code_segment());
     gdt.load();
-    SegmentSelectors {
-        code_selector,
-        tss_selector,
-    }
 }
 
 fn supports_gigabyte_pages(cpu_info: u32) -> bool {
@@ -350,9 +343,12 @@ fn set_last_entry(page_table: &mut PageTable, address: usize, flags: PageTableFl
 #[allow(clippy::fn_to_numeric_cast)]
 fn set_interrupt_handlers(idt: &mut InterruptDescriptorTable) {
     unsafe {
-        idt[InterruptIndex::Timer as u8].set_handler_addr(VirtAddr::new(timer_interrupt_handler as u64));
-        idt[InterruptIndex::Spurious as u8].set_handler_addr(VirtAddr::new(spurious_interrupt_handler as u64));
-        idt[InterruptIndex::Error as u8].set_handler_addr(VirtAddr::new(error_interrupt_handler as u64));
+        idt[InterruptIndex::Timer as u8]
+            .set_handler_addr(VirtAddr::new(timer_interrupt_handler as u64));
+        idt[InterruptIndex::Spurious as u8]
+            .set_handler_addr(VirtAddr::new(spurious_interrupt_handler as u64));
+        idt[InterruptIndex::Error as u8]
+            .set_handler_addr(VirtAddr::new(error_interrupt_handler as u64));
     }
 }
 

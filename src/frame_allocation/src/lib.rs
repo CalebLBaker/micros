@@ -60,10 +60,9 @@ impl<const MEMORY_FRAME_SIZE: usize> FrameAllocator<MEMORY_FRAME_SIZE> {
      */
     unsafe fn get_frame(&mut self) -> Option<usize> {
         if let FfiOption::Some(ret) = self.next {
-        self.next = unsafe { (*ret).next };
-        Some(ret as usize)
-        }
-        else {
+            self.next = unsafe { (*ret).next };
+            Some(ret as usize)
+        } else {
             None
         }
     }
