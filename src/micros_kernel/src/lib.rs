@@ -1,7 +1,6 @@
 #![no_std]
 #![deny(clippy::all)]
 #![deny(clippy::pedantic)]
-#![feature(abi_x86_interrupt)]
 
 #[cfg(target_arch = "x86_64")]
 mod amd64;

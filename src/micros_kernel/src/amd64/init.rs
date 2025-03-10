@@ -32,6 +32,9 @@ use x86_64::{
     },
 };
 
+// This code is explicitly only enabled for 64 bit processors, so casting from pointer to u64 is
+// safe here.
+#[allow(clippy::fn_to_numeric_cast)]
 pub unsafe fn initialize_operating_system(multiboot_info_ptr: u32, cpu_info: u32) -> Option<()> {
     unsafe {
         p1_table_for_stack[0x001].set_addr(
@@ -43,10 +46,10 @@ pub unsafe fn initialize_operating_system(multiboot_info_ptr: u32, cpu_info: u32
         CS::set_reg(segment_selectors.code_selector);
         load_tss(segment_selectors.tss_selector);
         let idt_ref = &mut *{ (&raw mut IDT) };
-        idt_ref.breakpoint.set_handler_fn(breakpoint_handler);
-        let double_fault_interrupt = idt_ref.double_fault.set_handler_fn(double_fault_handler);
+        idt_ref.breakpoint.set_handler_addr(VirtAddr::new(breakpoint_handler as u64));
+        let double_fault_interrupt = idt_ref.double_fault.set_handler_addr(VirtAddr::new(double_fault_handler as u64));
         double_fault_interrupt.set_stack_index(DOUBLE_FAULT_IST_INDEX);
-        idt_ref.page_fault.set_handler_fn(page_fault_handler);
+        idt_ref.page_fault.set_handler_addr(VirtAddr::new(page_fault_handler as u64));
         set_interrupt_handlers(idt_ref);
         idt_ref.load();
         apic::init();
@@ -342,10 +345,15 @@ fn set_last_entry(page_table: &mut PageTable, address: usize, flags: PageTableFl
     set_entry(page_table, 0x1ff, address, flags);
 }
 
+// This code is explicitly only enabled for 64 bit processors, so casting from pointer to u64 is
+// safe here.
+#[allow(clippy::fn_to_numeric_cast)]
 fn set_interrupt_handlers(idt: &mut InterruptDescriptorTable) {
-    idt[InterruptIndex::Timer as u8].set_handler_fn(timer_interrupt_handler);
-    idt[InterruptIndex::Spurious as u8].set_handler_fn(spurious_interrupt_handler);
-    idt[InterruptIndex::Error as u8].set_handler_fn(error_interrupt_handler);
+    unsafe {
+        idt[InterruptIndex::Timer as u8].set_handler_addr(VirtAddr::new(timer_interrupt_handler as u64));
+        idt[InterruptIndex::Spurious as u8].set_handler_addr(VirtAddr::new(spurious_interrupt_handler as u64));
+        idt[InterruptIndex::Error as u8].set_handler_addr(VirtAddr::new(error_interrupt_handler as u64));
+    }
 }
 
 const fn page_size(page_table_level: u8) -> usize {

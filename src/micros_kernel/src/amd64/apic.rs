@@ -22,12 +22,6 @@ pub unsafe fn init() {
     }
 }
 
-pub unsafe fn end_interrupt() {
-    unsafe {
-        END_OF_INTERRUPT.write_volatile(0);
-    }
-}
-
 unsafe fn disable_pic(base_port_number: u16, vector_offset: u8, icw3: u8) {
     unsafe {
         Port::new(base_port_number).write(INITIALIZE_PIC);
@@ -58,6 +52,5 @@ const APIC_BASE: u64 = 0xFEE0_0800;
 const SPURIOUS_INTERRUPT_REGISTER: *mut u32 = 0xFEE0_00F0 as *mut u32;
 const TIMER_REGISTER: *mut u32 = 0xFEE0_0320 as *mut u32;
 const ERROR_REGISTER: *mut u8 = 0xFEE0_0370 as *mut u8;
-const END_OF_INTERRUPT: *mut u32 = 0xFEE0_00B0 as *mut u32;
 
 const APIC_BASE_MODEL_SPECIFIC_REGISTER: u32 = 0x1B;
