@@ -5,6 +5,7 @@ mod init;
 use core::panic::PanicInfo;
 use frame_allocation::amd64::Amd64FrameAllocator;
 pub use init::initialize_operating_system;
+use init::GdtDescriptor;
 use x86_64::{instructions::hlt, structures::paging::PageTable};
 
 #[panic_handler]
@@ -34,6 +35,7 @@ unsafe extern "C" {
     fn enable_interrupts();
     fn load_tss();
     fn reset_code_segment();
+    fn load_gdt(gdtr: *const GdtDescriptor);
 
     // These are interrupt handlers that don't actually follow the C calling
     // convention, so they should not be called from Rust code.
@@ -44,3 +46,4 @@ unsafe extern "C" {
     fn double_fault_handler();
     fn page_fault_handler();
 }
+

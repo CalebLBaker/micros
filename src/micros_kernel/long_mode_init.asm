@@ -11,6 +11,7 @@ global set_apic_base;
 global enable_interrupts
 global load_tss
 global reset_code_segment
+global load_gdt
 
 USER_DATA_SEGMENT equ 0x23
 USER_CODE_SEGMENT equ 0x2B
