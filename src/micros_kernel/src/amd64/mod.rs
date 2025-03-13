@@ -1,11 +1,12 @@
 mod apic;
+mod arch;
 mod elf;
 mod init;
 
 use core::panic::PanicInfo;
 use frame_allocation::amd64::Amd64FrameAllocator;
-pub use init::initialize_operating_system;
 use init::GdtDescriptor;
+pub use init::initialize_operating_system;
 use x86_64::{instructions::hlt, structures::paging::PageTable};
 
 #[panic_handler]
@@ -46,4 +47,3 @@ unsafe extern "C" {
     fn double_fault_handler();
     fn page_fault_handler();
 }
-
