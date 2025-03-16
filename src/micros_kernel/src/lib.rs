@@ -1,7 +1,6 @@
 #![no_std]
 #![deny(clippy::all)]
 #![deny(clippy::pedantic)]
-#![feature(abi_x86_interrupt)]
 
 #[cfg(target_arch = "x86_64")]
 mod amd64;
@@ -14,17 +13,17 @@ use core::{
     slice,
 };
 use multiboot2::{
-    BootInformation, BootModuleTag, FramebufferTag, MemoryMapEntry, MemoryMapTag, ACPI_MEMORY,
-    AVAILABLE_MEMORY,
+    ACPI_MEMORY, AVAILABLE_MEMORY, BootInformation, BootModuleTag, FramebufferTag, MemoryMapEntry,
+    MemoryMapTag,
 };
 
 #[cfg(target_arch = "x86_64")]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn main(multiboot_info_ptr: u32, cpu_info: u32) -> ! {
     unsafe {
         amd64::initialize_operating_system(multiboot_info_ptr, cpu_info);
+        amd64::halt()
     }
-    amd64::halt()
 }
 
 trait Architecture: Sized {
@@ -92,9 +91,10 @@ struct ProcessLaunchInfo {
 unsafe fn boot_os<Proc: Architecture>(
     proc: &mut Proc,
     multiboot_info_ptr: *const u8,
+    architecture_specific_reserved_memory: Range<usize>,
 ) -> Option<ProcessLaunchInfo> {
     // Initialize available memory and set up page tables
-    let boot_info = BootInformation::new(multiboot_info_ptr);
+    let boot_info = unsafe { BootInformation::new(multiboot_info_ptr) };
 
     let mut physical_memory_size = 0;
 
@@ -105,17 +105,18 @@ unsafe fn boot_os<Proc: Architecture>(
         addr_of!(header_start) as usize..addr_of!(kernel_end) as usize,
         boot_info.address_range(),
         memory_manager_bounds.clone(),
+        architecture_specific_reserved_memory.clone(),
         0..0,
     ];
     let memory_regions_in_use = if let Some(framebuffer_tag) =
         boot_info.tags_of_type::<FramebufferTag>().next()
     {
         let framebuffer_addr = framebuffer_tag.framebuffer as usize;
-        memory_regions_in_use_arr[3] = framebuffer_addr
+        memory_regions_in_use_arr[4] = framebuffer_addr
             ..framebuffer_addr + (framebuffer_tag.height as usize * framebuffer_tag.pitch as usize);
         &mut memory_regions_in_use_arr
     } else {
-        &mut memory_regions_in_use_arr[0..3]
+        &mut memory_regions_in_use_arr[0..4]
     };
     let available_memory_regions =
         unused_memory_regions(memory_regions_in_use, Proc::INITIAL_VIRTUAL_MEMORY_SIZE)?;
@@ -125,11 +126,13 @@ unsafe fn boot_os<Proc: Architecture>(
         for memory_region in
             unused_memory_regions_from_area(memory_area, available_memory_regions.clone())
         {
-            proc.register_memory_region(memory_region);
+            unsafe {
+                proc.register_memory_region(memory_region);
+            }
         }
     }
 
-    load_memory_manager(proc, memory_manager_bounds)
+    unsafe { load_memory_manager(proc, memory_manager_bounds) }
 }
 
 fn copy_and_zero_fill(dest: &mut [u8], src: &[u8]) {
@@ -142,7 +145,7 @@ fn slice_with_bounds_check(src: &[u8], index: usize, len: usize) -> &[u8] {
     &src[index.min(src.len())..(index + len).min(src.len())]
 }
 
-extern "C" {
+unsafe extern "C" {
     // These aren't real variables. We just need the address of the start and end of the kernel
     static header_start: u8;
     static kernel_end: u8;
@@ -156,19 +159,22 @@ unsafe fn load_memory_manager<Proc: Architecture>(
     proc: &mut Proc,
     exectuable_location: Range<usize>,
 ) -> Option<ProcessLaunchInfo> {
-    let memory_manager_root_page_table = proc.initialize_memory_manager_page_tables()?;
+    let memory_manager_root_page_table = unsafe { proc.initialize_memory_manager_page_tables()? };
 
-    let memory_manager_elf_header = &*(exectuable_location.start as *const Proc::ExecutableHeader);
+    let memory_manager_elf_header =
+        unsafe { &*(exectuable_location.start as *const Proc::ExecutableHeader) };
 
     if !memory_manager_elf_header.is_valid(exectuable_location.len()) {
         return None;
     }
 
-    for segment_header in slice::from_raw_parts(
-        (exectuable_location.start + memory_manager_elf_header.segment_header_table_offset())
-            as *const Proc::SegmentHeader,
-        memory_manager_elf_header.num_segments(),
-    )
+    for segment_header in unsafe {
+        slice::from_raw_parts(
+            (exectuable_location.start + memory_manager_elf_header.segment_header_table_offset())
+                as *const Proc::SegmentHeader,
+            memory_manager_elf_header.num_segments(),
+        )
+    }
     .iter()
     .filter(|header| header.segment_type() == ELF_LOADABLE_SEGMENT)
     {
@@ -177,16 +183,18 @@ unsafe fn load_memory_manager<Proc: Architecture>(
         {
             return None;
         }
-        proc.copy_into_address_space(
-            &mut *memory_manager_root_page_table,
-            segment_header.address(),
-            slice::from_raw_parts(
-                (exectuable_location.start + segment_header.offset()) as *const u8,
-                segment_header.file_size(),
-            ),
-            segment_header.memory_size(),
-            segment_header.flags(),
-        );
+        unsafe {
+            proc.copy_into_address_space(
+                &mut *memory_manager_root_page_table,
+                segment_header.address(),
+                slice::from_raw_parts(
+                    (exectuable_location.start + segment_header.offset()) as *const u8,
+                    segment_header.file_size(),
+                ),
+                segment_header.memory_size(),
+                segment_header.flags(),
+            )
+        };
     }
 
     Some(ProcessLaunchInfo {

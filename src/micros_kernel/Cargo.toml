@@ -1,7 +1,7 @@
 [package]
 name = "micros_kernel"
-version = "0.2.1"
-edition = "2021"
+version = "0.3.0"
+edition = "2024"
 authors = ["Caleb Baker <calebbaker774@gmail.com>"]
 license = "BSL-1.0"
 
@@ -11,8 +11,3 @@ crate-type = ["staticlib"]
 [dependencies]
 frame_allocation = { path = "../frame_allocation" }
 multiboot2 = { path = "../multiboot2" }
-
-[target.'cfg(target_arch = "x86_64")'.dependencies]
-x86_64 = "0.15.1"
-x2apic = "0.4.3"
-spin = "0.9.8"

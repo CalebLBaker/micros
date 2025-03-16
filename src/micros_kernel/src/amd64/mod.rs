@@ -1,31 +1,22 @@
 mod apic;
+mod arch;
 mod elf;
 mod init;
 
-use apic::end_interrupt;
+use arch::PageTable;
 use core::panic::PanicInfo;
 use frame_allocation::amd64::Amd64FrameAllocator;
 pub use init::initialize_operating_system;
-use x86_64::{
-    instructions::hlt,
-    structures::{
-        idt::{InterruptStackFrame, PageFaultErrorCode},
-        paging::PageTable,
-    },
-};
+use init::{GdtDescriptor, IdtDescriptor, InterruptServiceRoutine};
 
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
-    halt()
+    unsafe { halt() }
 }
 
-pub fn halt() -> ! {
-    loop {
-        hlt();
-    }
-}
+unsafe extern "C" {
+    pub fn halt() -> !;
 
-extern "C" {
     static mut p4_table: PageTable;
     static mut p2_tables: [PageTable; 2];
     static mut p1_table_for_stack: PageTable;
@@ -35,35 +26,21 @@ extern "C" {
         root_page_table_address: usize,
         entry_point: usize,
     ) -> !;
-}
 
-extern "x86-interrupt" fn breakpoint_handler(_stack_frame: InterruptStackFrame) {}
+    fn write_port(port: u16, value: u8);
+    fn set_apic_base();
+    fn enable_interrupts();
+    fn load_tss();
+    fn reset_code_segment();
+    fn load_gdt(gdtr: *const GdtDescriptor);
+    fn load_idt(idtr: *const IdtDescriptor);
 
-extern "x86-interrupt" fn double_fault_handler(_stack_frame: InterruptStackFrame, _: u64) -> ! {
-    halt();
-}
-
-extern "x86-interrupt" fn page_fault_handler(
-    _stack_frame: InterruptStackFrame,
-    _error_code: PageFaultErrorCode,
-) {
-    halt();
-}
-
-extern "x86-interrupt" fn spurious_interrupt_handler(_: InterruptStackFrame) {
-    unsafe {
-        end_interrupt();
-    }
-}
-
-extern "x86-interrupt" fn error_interrupt_handler(_: InterruptStackFrame) {
-    unsafe {
-        end_interrupt();
-    }
-}
-
-extern "x86-interrupt" fn timer_interrupt_handler(_: InterruptStackFrame) {
-    unsafe {
-        end_interrupt();
-    }
+    // These are interrupt handlers that don't actually follow the C calling
+    // convention, so they should not be called from Rust code.
+    static breakpoint_handler: InterruptServiceRoutine;
+    static spurious_interrupt_handler: InterruptServiceRoutine;
+    static error_interrupt_handler: InterruptServiceRoutine;
+    static timer_interrupt_handler: InterruptServiceRoutine;
+    static double_fault_handler: InterruptServiceRoutine;
+    static page_fault_handler: InterruptServiceRoutine;
 }
