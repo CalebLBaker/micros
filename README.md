@@ -33,16 +33,10 @@ The newly built image will be at `build/micros-amd64.iso`.
 
 ```bash
 sudo pacman -S core-devel nasm rustup lld mtools libisoburn openssl sbsigntools
-rustup component add rust-src --toolchain nightly-x86_64-unknown-linux-gnu
-cargo install cargo-about
+rustup component add rust-src
 cd $(MICROS_REPO_ROOT)
 git submodule init
 git submodule update
-```
-
-##### Dependencies only needed for supply chain auditing
-```bash
-cargo install cargo-audit
 ```
 
 ##### Dependencies only needed for running in an emulaator
@@ -55,15 +49,9 @@ sudo pacman -S qemu-desktop
 ```bash
 sudo apt install curl nasm lld mtools sbsigntool xorriso
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-rustup component add rust-src --toolchain nightly-x86_64-unknown-linux-gnu
-cargo install cargo-about
+rustup component add rust-src
 git submodule init
 git submodule update
-```
-
-##### Dependencies only needed for supply chain auditing
-```bash
-cargo install cargo-audit
 ```
 
 ##### Dependencies only needed for running in an emulaator

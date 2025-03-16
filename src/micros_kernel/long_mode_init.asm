@@ -12,6 +12,8 @@ global enable_interrupts
 global load_tss
 global reset_code_segment
 global load_gdt
+global load_idt
+global halt
 
 USER_DATA_SEGMENT equ 0x23
 USER_CODE_SEGMENT equ 0x2B
@@ -76,6 +78,12 @@ set_apic_base:
 enable_interrupts:
     sti
     ret
+
+; Args:
+; rdi: physical address of idt pointer
+load_idt:
+   lidt [rdi]
+   ret
 
 ; Args:
 ; rdi: physical address of gdt pointer

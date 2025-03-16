@@ -22,8 +22,8 @@ use multiboot2::{
 pub extern "C" fn main(multiboot_info_ptr: u32, cpu_info: u32) -> ! {
     unsafe {
         amd64::initialize_operating_system(multiboot_info_ptr, cpu_info);
+        amd64::halt()
     }
-    amd64::halt()
 }
 
 trait Architecture: Sized {

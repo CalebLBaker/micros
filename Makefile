@@ -48,15 +48,11 @@ run: $(iso)
 
 check: $(image) rust_build
 	cargo clippy 
-	cargo audit
 
 rust_build:
 	RUSTFLAGS="-C relocation-model=static" cargo build --target $(target) --profile=$(profile)
 
 iso: $(iso)
-
-$(isodir)/third-party-licenses.html: about.toml about.hbs $(isodir)
-	cargo about generate about.hbs -o $@
 
 $(isodir)/EFI/BOOT:
 	mkdir -p $@
@@ -96,7 +92,7 @@ $(isodir)/limine-uefi-cd.bin: $(isodir)/EFI/BOOT/BOOTX64.EFI $(image) $(isodir)/
 	mcopy -D o -m -i $@ $(isodir)/limine.cfg ::
 
 
-$(iso): $(image) $(isodir)/limine.cfg $(isodir)/LICENSE $(isodir)/third-party-licenses.html $(isodir)/memory_manager.elf $(isodir)/limine-uefi-cd.bin $(isodir)/limine-bios-cd.bin $(isodir)/limine-bios.sys $(isodir)/EFI/BOOT/BOOTX64.EFI limine/limine
+$(iso): $(image) $(isodir)/limine.cfg $(isodir)/LICENSE $(isodir)/memory_manager.elf $(isodir)/limine-uefi-cd.bin $(isodir)/limine-bios-cd.bin $(isodir)/limine-bios.sys $(isodir)/EFI/BOOT/BOOTX64.EFI limine/limine
 	xorriso -as mkisofs -b limine-bios-cd.bin -no-emul-boot -boot-load-size 4 -boot-info-table --efi-boot limine-uefi-cd.bin -efi-boot-part --efi-boot-image --protective-msdos-label $(isodir) -o $@
 	limine/limine bios-install $@
 

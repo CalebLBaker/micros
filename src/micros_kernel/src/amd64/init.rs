@@ -1,8 +1,10 @@
 use crate::{
     amd64::{
-        apic, arch::PROC, breakpoint_handler, double_fault_handler, enable_interrupts,
-        error_interrupt_handler, launch_memory_manager, load_gdt, load_tss, p1_table_for_stack,
-        p2_tables, page_fault_handler, reset_code_segment, spurious_interrupt_handler,
+        apic,
+        arch::{PROC, PageTableEntry, PageTableFlags},
+        breakpoint_handler, double_fault_handler, enable_interrupts, error_interrupt_handler,
+        launch_memory_manager, load_gdt, load_idt, load_tss, p1_table_for_stack, p2_tables,
+        page_fault_handler, reset_code_segment, spurious_interrupt_handler,
         timer_interrupt_handler,
     },
     boot_os,
@@ -11,11 +13,6 @@ use apic::{InterruptIndex, LOCAL_APIC_END, LOCAL_APIC_START};
 use core::ptr;
 use frame_allocation::{FfiOption, FrameAllocator, amd64::FOUR_KILOBYTES};
 use ptr::{addr_of, addr_of_mut};
-use x86_64::{
-    VirtAddr,
-    addr::PhysAddr,
-    structures::{idt::InterruptDescriptorTable, paging::page_table::PageTableFlags},
-};
 
 #[repr(C, packed(2))]
 pub struct GdtDescriptor {
@@ -23,34 +20,31 @@ pub struct GdtDescriptor {
     offset: *const GlobalDescriptorTable,
 }
 
+#[repr(C, packed(2))]
+pub struct IdtDescriptor {
+    size: u16,
+    offset: *const InterruptDescriptorTable,
+}
+
+#[repr(C)]
+pub struct InterruptServiceRoutine {
+    _fake: u8,
+}
+
 // This code is explicitly only enabled for 64 bit processors, so casting from pointer to u64 is
 // safe here.
 #[allow(clippy::fn_to_numeric_cast)]
 pub unsafe fn initialize_operating_system(multiboot_info_ptr: u32, cpu_info: u32) -> Option<()> {
     unsafe {
-        p1_table_for_stack[0x001].set_addr(
-            PhysAddr::new_truncate(addr_of!(DOUBLE_FAULT_STACK) as u64),
+        p1_table_for_stack[0x001] = PageTableEntry::new(
+            addr_of!(DOUBLE_FAULT_STACK) as u64,
             PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::NO_EXECUTE,
         );
 
         load_global_descriptor_table();
         reset_code_segment();
         load_tss();
-        let idt_ref = &mut *{ (&raw mut IDT) };
-        idt_ref
-            .breakpoint
-            .set_handler_addr(VirtAddr::new(breakpoint_handler as u64));
-        let double_fault_interrupt = idt_ref
-            .double_fault
-            .set_handler_addr(VirtAddr::new(double_fault_handler as u64));
-        double_fault_interrupt.set_stack_index(DOUBLE_FAULT_IST_INDEX);
-        idt_ref
-            .page_fault
-            .set_handler_addr(VirtAddr::new(page_fault_handler as u64));
-        set_interrupt_handlers(idt_ref);
-        idt_ref.load();
-        apic::init();
-        enable_interrupts();
+        setup_interrupts();
 
         let proc = &mut *addr_of_mut!(PROC);
         if supports_gigabyte_pages(cpu_info) {
@@ -75,7 +69,32 @@ pub unsafe fn initialize_operating_system(multiboot_info_ptr: u32, cpu_info: u32
     }
 }
 
-static mut IDT: InterruptDescriptorTable = InterruptDescriptorTable::new();
+static mut IDT: InterruptDescriptorTable = InterruptDescriptorTable {
+    division_error: IdtGate::EMPTY,
+    debug: IdtGate::EMPTY,
+    non_maskable_interrupt: IdtGate::EMPTY,
+    breakpoint: IdtGate::EMPTY,
+    overflow: IdtGate::EMPTY,
+    bound_range_exceeded: IdtGate::EMPTY,
+    invalid_opcode: IdtGate::EMPTY,
+    device_not_available: IdtGate::EMPTY,
+    double_fault: IdtGate::EMPTY,
+    coprocessor_segment_overrun: IdtGate::EMPTY,
+    invalid_tss: IdtGate::EMPTY,
+    segment_not_present: IdtGate::EMPTY,
+    stack_segmentation_fault: IdtGate::EMPTY,
+    general_protection_fault: IdtGate::EMPTY,
+    page_fault: IdtGate::EMPTY,
+    reserved_0: IdtGate::EMPTY,
+    x87_floating_point_exception: IdtGate::EMPTY,
+    alignment_check: IdtGate::EMPTY,
+    machine_check: IdtGate::EMPTY,
+    simd_floating_point_exception: IdtGate::EMPTY,
+    virtualization_exception: IdtGate::EMPTY,
+    control_point_exception: IdtGate::EMPTY,
+    reserved_1: [IdtGate::EMPTY; 0xa],
+    interrupts: [IdtGate::EMPTY; 0xe0],
+};
 
 static TSS: TaskStateSegment = TaskStateSegment {
     reserved_0: 0,
@@ -95,6 +114,13 @@ static mut GDT: GlobalDescriptorTable = GlobalDescriptorTable {
     user_code: SegmentDescriptor::empty(),
 };
 
+// size_of::<GlobalDescriptorTable>() is known to be 0x1000, which is within the bounds for u16
+#[allow(clippy::cast_possible_truncation)]
+static mut IDTR: IdtDescriptor = IdtDescriptor {
+    size: (size_of::<InterruptDescriptorTable>() - 1) as u16,
+    offset: ptr::null(),
+};
+
 // size_of::<GlobalDescriptorTable>() is known to be 0x30, which is within the bounds for u16
 #[allow(clippy::cast_possible_truncation)]
 static mut GDTR: GdtDescriptor = GdtDescriptor {
@@ -106,7 +132,7 @@ static mut DOUBLE_FAULT_STACK: DoubleFaultStack = DoubleFaultStack([0; DOUBLE_FA
 
 const GIGABYTE_PAGES_CPUID_BIT: u32 = 0x400_0000;
 
-const DOUBLE_FAULT_IST_INDEX: u16 = 0;
+const DOUBLE_FAULT_IST_INDEX: u8 = 0;
 const DOUBLE_FAULT_STACK_SIZE: usize = FOUR_KILOBYTES;
 
 const DOUBLE_FAULT_STACK_TOP: u64 = 0xffff_ffff_ffe0_2000;
@@ -119,6 +145,8 @@ const TSS_ACCESS_BYTE: u8 = 0x89;
 const KERNEL_CODE_SEGMENT_ACCESS_BYTE: u8 = 0x9a;
 const USER_DATA_SEGMENT_ACCESS_BYTE: u8 = 0xf2;
 const USER_CODE_SEGMENT_ACCESS_BYTE: u8 = 0xfa;
+
+const KERNEL_CODE_SEGMENT_SELECTOR: u16 = 0x10;
 
 // size_of::<TaskStateSegment>() is known to be 0x68, which is within the allowed range for u16
 #[allow(clippy::cast_possible_truncation)]
@@ -239,6 +267,74 @@ impl GlobalDescriptorTable {
     }
 }
 
+#[repr(C)]
+struct IdtGate {
+    offset_0_16: u16,
+    segment_selector: u16,
+    interrupt_stack_index: u8,
+    flags: u8,
+    offset_16_32: u16,
+    offset_32_64: u32,
+    reserved: u32,
+}
+
+impl IdtGate {
+    const INTERRUPT_GATE: u8 = 0xe;
+    const PRESENT: u8 = 0x8e;
+
+    const EMPTY: Self = Self {
+        offset_0_16: 0,
+        segment_selector: KERNEL_CODE_SEGMENT_SELECTOR,
+        interrupt_stack_index: 0,
+        flags: Self::INTERRUPT_GATE,
+        offset_16_32: 0,
+        offset_32_64: 0,
+        reserved: 0,
+    };
+
+    fn set_address(&mut self, isr: *const InterruptServiceRoutine) {
+        let address = isr as u64;
+        self.flags |= Self::PRESENT;
+        self.offset_0_16 = (address & 0xffff) as u16;
+        self.offset_16_32 = ((address & 0xffff_0000) >> 16) as u16;
+        self.offset_32_64 = ((address & 0xffff_ffff_0000_0000) >> 32) as u32;
+    }
+}
+
+#[repr(C)]
+struct InterruptDescriptorTable {
+    division_error: IdtGate,
+    debug: IdtGate,
+    non_maskable_interrupt: IdtGate,
+    breakpoint: IdtGate,
+    overflow: IdtGate,
+    bound_range_exceeded: IdtGate,
+    invalid_opcode: IdtGate,
+    device_not_available: IdtGate,
+    double_fault: IdtGate,
+    coprocessor_segment_overrun: IdtGate,
+    invalid_tss: IdtGate,
+    segment_not_present: IdtGate,
+    stack_segmentation_fault: IdtGate,
+    general_protection_fault: IdtGate,
+    page_fault: IdtGate,
+    reserved_0: IdtGate,
+    x87_floating_point_exception: IdtGate,
+    alignment_check: IdtGate,
+    machine_check: IdtGate,
+    simd_floating_point_exception: IdtGate,
+    virtualization_exception: IdtGate,
+    control_point_exception: IdtGate,
+    reserved_1: [IdtGate; 0xa],
+    interrupts: [IdtGate; 0xe0],
+}
+
+impl InterruptDescriptorTable {
+    fn interrupt(&mut self, index: u16) -> &mut IdtGate {
+        &mut self.interrupts[(index - 0x20) as usize]
+    }
+}
+
 #[repr(C, align(0x1000))]
 struct DoubleFaultStack([u8; DOUBLE_FAULT_STACK_SIZE]);
 
@@ -254,16 +350,31 @@ fn supports_gigabyte_pages(cpu_info: u32) -> bool {
     (cpu_info & GIGABYTE_PAGES_CPUID_BIT) != 0
 }
 
+unsafe fn setup_interrupts() {
+    let idt_ref = unsafe { &mut *{ (&raw mut IDT) } };
+    idt_ref.breakpoint.set_address(addr_of!(breakpoint_handler));
+    idt_ref
+        .double_fault
+        .set_address(addr_of!(double_fault_handler));
+    idt_ref.double_fault.interrupt_stack_index = DOUBLE_FAULT_IST_INDEX;
+    idt_ref.page_fault.set_address(addr_of!(page_fault_handler));
+    set_interrupt_handlers(idt_ref);
+    unsafe {
+        IDTR.offset = addr_of!(IDT);
+        load_idt(addr_of!(IDTR));
+        apic::init();
+        enable_interrupts();
+    }
+}
+
 // This code is explicitly only enabled for 64 bit processors, so casting from pointer to u64 is
 // safe here.
 #[allow(clippy::fn_to_numeric_cast)]
 fn set_interrupt_handlers(idt: &mut InterruptDescriptorTable) {
-    unsafe {
-        idt[InterruptIndex::Timer as u8]
-            .set_handler_addr(VirtAddr::new(timer_interrupt_handler as u64));
-        idt[InterruptIndex::Spurious as u8]
-            .set_handler_addr(VirtAddr::new(spurious_interrupt_handler as u64));
-        idt[InterruptIndex::Error as u8]
-            .set_handler_addr(VirtAddr::new(error_interrupt_handler as u64));
-    }
+    idt.interrupt(InterruptIndex::Timer as u16)
+        .set_address(addr_of!(timer_interrupt_handler));
+    idt.interrupt(InterruptIndex::Spurious as u16)
+        .set_address(addr_of!(spurious_interrupt_handler));
+    idt.interrupt(InterruptIndex::Error as u16)
+        .set_address(addr_of!(error_interrupt_handler));
 }
