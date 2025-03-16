@@ -31,9 +31,6 @@ pub struct InterruptServiceRoutine {
     _fake: u8,
 }
 
-// This code is explicitly only enabled for 64 bit processors, so casting from pointer to u64 is
-// safe here.
-#[allow(clippy::fn_to_numeric_cast)]
 pub unsafe fn initialize_operating_system(multiboot_info_ptr: u32, cpu_info: u32) -> Option<()> {
     unsafe {
         p1_table_for_stack[0x001] = PageTableEntry::new(
@@ -114,7 +111,7 @@ static mut GDT: GlobalDescriptorTable = GlobalDescriptorTable {
     user_code: SegmentDescriptor::empty(),
 };
 
-// size_of::<GlobalDescriptorTable>() is known to be 0x1000, which is within the bounds for u16
+// size_of::<InterruptDescriptorTable>() is known to be 0x1000, which is within the bounds for u16
 #[allow(clippy::cast_possible_truncation)]
 static mut IDTR: IdtDescriptor = IdtDescriptor {
     size: (size_of::<InterruptDescriptorTable>() - 1) as u16,
@@ -367,9 +364,6 @@ unsafe fn setup_interrupts() {
     }
 }
 
-// This code is explicitly only enabled for 64 bit processors, so casting from pointer to u64 is
-// safe here.
-#[allow(clippy::fn_to_numeric_cast)]
 fn set_interrupt_handlers(idt: &mut InterruptDescriptorTable) {
     idt.interrupt(InterruptIndex::Timer as u16)
         .set_address(addr_of!(timer_interrupt_handler));

@@ -1,5 +1,4 @@
 #![no_std]
-#![allow(clippy::missing_safety_doc)]
 
 use core::{mem::size_of, slice};
 use multiboot2::{FramebufferTag, aligned_pointer_cast};
@@ -11,6 +10,9 @@ pub enum Framebuffer<'a> {
 }
 
 impl<'a> Framebuffer<'a> {
+    /// # Safety
+    ///
+    /// To avoid constructing an invalid framebuffer, the information contained in `tag` must be completely accurate.
     pub unsafe fn new(tag: FramebufferTag<'a>) -> Option<Self> {
         let core = FramebufferCore {
             framebuffer: unsafe {
@@ -89,6 +91,9 @@ impl<'a> StandardRgbFramebuffer<'a> {
         }
     }
 
+    /// # Safety
+    ///
+    /// To avoid constructing an invalid framebuffer, the information contained in `tag` must be completely accurate.
     pub unsafe fn from_tag(tag: FramebufferTag<'a>) -> Option<Self> {
         Self::new(unsafe { Framebuffer::new(tag) }?)
     }

@@ -3,12 +3,24 @@
 #![deny(clippy::all)]
 #![deny(clippy::pedantic)]
 #![allow(clippy::empty_loop)]
-#![allow(clippy::missing_safety_doc)]
 
 use core::panic::PanicInfo;
 use framebuffer::StandardRgbFramebuffer;
 use multiboot2::{BootInformation, FramebufferTag};
 
+/// # Safety
+///
+/// This is the entry function for the memory manager. Incorrect assumtpions here could mess up
+/// **ALL** processes both kernel and userspace.
+///
+/// ## Assumptions:
+///
+/// * `boot_info_ptr` must point to a valid multiboot2 boot information structure
+/// 
+/// * `frame_allocator` must be in a valid state
+///
+/// * The current process' virtual address space must be identity mapped to the entirety of the
+///   machine's physical address space
 #[cfg(target_arch = "x86_64")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn main(

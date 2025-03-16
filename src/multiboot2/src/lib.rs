@@ -1,6 +1,4 @@
 #![no_std]
-#![allow(clippy::missing_errors_doc)]
-#![allow(clippy::missing_safety_doc)]
 
 use core::{
     mem::{align_of, size_of},
@@ -183,6 +181,9 @@ pub struct BootInformation<'a> {
 }
 
 impl<'a> BootInformation<'a> {
+    /// # Safety
+    ///
+    /// `boot_info_ptr` must point to a valid multiboot2 boot information structure
     pub unsafe fn new(boot_info_ptr: *const u8) -> Self {
         unsafe {
             let boot_info_size =
