@@ -1,6 +1,6 @@
 [package]
 name = "frame_allocation"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
 authors = ["Caleb Baker <calebbaker774@gmail.com>"]
 license = "BSL-1.0"
