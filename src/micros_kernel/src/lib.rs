@@ -5,17 +5,20 @@
 #[cfg(target_arch = "x86_64")]
 mod amd64;
 
+use architecture::Architecture;
 use core::{
     cmp::{max, min},
     iter::once,
     ops::Range,
-    ptr::addr_of,
-    slice,
+    ptr, slice,
 };
+use elf::{ELF_LOADABLE_SEGMENT, ExecutableHeader, SegmentFlags, SegmentHeader};
 use multiboot2::{
-    ACPI_MEMORY, AVAILABLE_MEMORY, BootInformation, BootModuleTag, FramebufferTag, MemoryMapEntry,
-    MemoryMapTag,
+    ACPI_MEMORY, AVAILABLE_MEMORY, BootInformation, BootInformationHeader, BootModuleTag,
+    FramebufferTag, MemoryMapEntry, MemoryMapTag,
 };
+use physical_address::PhysicalAddress;
+use ptr::addr_of;
 
 #[cfg(target_arch = "x86_64")]
 #[unsafe(no_mangle)]
@@ -26,9 +29,7 @@ pub extern "C" fn main(multiboot_info_ptr: u32, cpu_info: u32) -> ! {
     }
 }
 
-trait Architecture: Sized {
-    const INITIAL_VIRTUAL_MEMORY_SIZE: usize;
-
+trait ArchitectureKernel: Architecture {
     type PageTable;
 
     type ExecutableHeader: ExecutableHeader;
@@ -37,7 +38,7 @@ trait Architecture: Sized {
 
     unsafe fn initialize_memory_manager_page_tables(&mut self) -> Option<*mut Self::PageTable>;
 
-    unsafe fn register_memory_region(&mut self, memory_region: Range<usize>);
+    unsafe fn register_memory_region(&mut self, memory_region: Range<*mut u8>);
 
     unsafe fn copy_into_address_space(
         &mut self,
@@ -47,40 +48,8 @@ trait Architecture: Sized {
         size: usize,
         flags: SegmentFlags,
     ) -> Option<()>;
-}
 
-trait ExecutableHeader {
-    fn is_valid(&self, file_size: usize) -> bool;
-
-    fn num_segments(&self) -> usize;
-
-    fn segment_header_table_offset(&self) -> usize;
-
-    fn entry(&self) -> usize;
-}
-
-trait SegmentHeader {
-    fn segment_type(&self) -> u32;
-    fn offset(&self) -> usize;
-    fn address(&self) -> usize;
-    fn file_size(&self) -> usize;
-    fn memory_size(&self) -> usize;
-    fn flags(&self) -> SegmentFlags;
-}
-
-#[derive(Clone, Copy)]
-struct SegmentFlags(u32);
-
-impl SegmentFlags {
-    #[must_use]
-    fn writable(self) -> bool {
-        (self.0 & ELF_WRITABLE_SEGMENT) != 0
-    }
-
-    #[must_use]
-    fn executable(self) -> bool {
-        (self.0 & ELF_EXECUTABLE_SEGMENT) != 0
-    }
+    fn virtual_memory_end(&self) -> *const u8;
 }
 
 struct ProcessLaunchInfo {
@@ -88,43 +57,40 @@ struct ProcessLaunchInfo {
     entry_point: usize,
 }
 
-unsafe fn boot_os<Proc: Architecture>(
+unsafe fn boot_os<Proc: ArchitectureKernel>(
     proc: &mut Proc,
-    multiboot_info_ptr: *const u8,
-    architecture_specific_reserved_memory: Range<usize>,
+    multiboot_info_ptr: *const BootInformationHeader,
+    architecture_specific_reserved_memory: Range<*const u8>,
 ) -> Option<ProcessLaunchInfo> {
     // Initialize available memory and set up page tables
     let boot_info = unsafe { BootInformation::new(multiboot_info_ptr) };
 
-    let mut physical_memory_size = 0;
-
     // Add free frames from first 4 GB to available frame list
-    let memory_manager_bounds = memory_manager_executable(boot_info)?;
+    let memory_manager_bounds = memory_manager_executable(proc, boot_info)?;
 
     let mut memory_regions_in_use_arr = [
-        addr_of!(header_start) as usize..addr_of!(kernel_end) as usize,
+        addr_of!(header_start)..addr_of!(kernel_end),
         boot_info.address_range(),
         memory_manager_bounds.clone(),
         architecture_specific_reserved_memory.clone(),
-        0..0,
+        ptr::null()..ptr::null(),
     ];
-    let memory_regions_in_use = if let Some(framebuffer_tag) =
-        boot_info.tags_of_type::<FramebufferTag>().next()
-    {
-        let framebuffer_addr = framebuffer_tag.framebuffer as usize;
-        memory_regions_in_use_arr[4] = framebuffer_addr
-            ..framebuffer_addr + (framebuffer_tag.height as usize * framebuffer_tag.pitch as usize);
-        &mut memory_regions_in_use_arr
-    } else {
-        &mut memory_regions_in_use_arr[0..4]
-    };
+    let memory_regions_in_use =
+        if let Some(framebuffer_tag) = boot_info.tags_of_type::<FramebufferTag>().next() {
+            let framebuffer_addr = proc.physical_to_virtual_address(framebuffer_tag.framebuffer);
+            memory_regions_in_use_arr[4] = framebuffer_addr
+                ..framebuffer_addr
+                    .wrapping_add(framebuffer_tag.height as usize * framebuffer_tag.pitch as usize);
+            &mut memory_regions_in_use_arr
+        } else {
+            &mut memory_regions_in_use_arr[0..4]
+        };
     let available_memory_regions =
-        unused_memory_regions(memory_regions_in_use, Proc::INITIAL_VIRTUAL_MEMORY_SIZE)?;
+        unused_memory_regions(memory_regions_in_use, proc.virtual_memory_end())?;
 
     for memory_area in available_memory_areas(boot_info.tags_of_type::<MemoryMapTag>().next()?) {
-        physical_memory_size = max(physical_memory_size, memory_area_end(memory_area));
         for memory_region in
-            unused_memory_regions_from_area(memory_area, available_memory_regions.clone())
+            unused_memory_regions_from_area(proc, memory_area, available_memory_regions.clone())?
         {
             unsafe {
                 proc.register_memory_region(memory_region);
@@ -151,34 +117,39 @@ unsafe extern "C" {
     static kernel_end: u8;
 }
 
-const ELF_LOADABLE_SEGMENT: u32 = 1;
-const ELF_WRITABLE_SEGMENT: u32 = 2;
-const ELF_EXECUTABLE_SEGMENT: u32 = 1;
-
-unsafe fn load_memory_manager<Proc: Architecture>(
+unsafe fn load_memory_manager<Proc: ArchitectureKernel>(
     proc: &mut Proc,
-    exectuable_location: Range<usize>,
+    exectuable_location: Range<*const u8>,
 ) -> Option<ProcessLaunchInfo> {
     let memory_manager_root_page_table = unsafe { proc.initialize_memory_manager_page_tables()? };
 
     let memory_manager_elf_header =
-        unsafe { &*(exectuable_location.start as *const Proc::ExecutableHeader) };
+        unsafe { &*(exectuable_location.start.cast::<Proc::ExecutableHeader>()) };
 
-    if !memory_manager_elf_header.is_valid(exectuable_location.len()) {
+    let executable_size = unsafe {
+        exectuable_location
+            .end
+            .offset_from(exectuable_location.start)
+    }
+    .try_into()
+    .ok()?;
+    if !memory_manager_elf_header.is_valid(executable_size) {
         return None;
     }
 
     for segment_header in unsafe {
         slice::from_raw_parts(
-            (exectuable_location.start + memory_manager_elf_header.segment_header_table_offset())
-                as *const Proc::SegmentHeader,
+            (exectuable_location
+                .start
+                .add(memory_manager_elf_header.segment_header_table_offset()))
+            .cast::<Proc::SegmentHeader>(),
             memory_manager_elf_header.num_segments(),
         )
     }
     .iter()
     .filter(|header| header.segment_type() == ELF_LOADABLE_SEGMENT)
     {
-        if segment_header.offset() + segment_header.file_size() > exectuable_location.len()
+        if segment_header.offset() + segment_header.file_size() > executable_size
             || segment_header.file_size() > segment_header.memory_size()
         {
             return None;
@@ -188,7 +159,7 @@ unsafe fn load_memory_manager<Proc: Architecture>(
                 &mut *memory_manager_root_page_table,
                 segment_header.address(),
                 slice::from_raw_parts(
-                    (exectuable_location.start + segment_header.offset()) as *const u8,
+                    exectuable_location.start.add(segment_header.offset()),
                     segment_header.file_size(),
                 ),
                 segment_header.memory_size(),
@@ -203,52 +174,66 @@ unsafe fn load_memory_manager<Proc: Architecture>(
     })
 }
 
-// I'm only supporting 64 bit machines as of now so casting from u64 to usize shouldn't result
-// in any truncation. Will need to revisit if I ever add support for 32 bit machines.
-#[allow(clippy::cast_possible_truncation)]
-fn memory_area_start(area: &MemoryMapEntry) -> usize {
-    area.base_addr as usize
+fn memory_area_start<Proc: Architecture>(proc: &Proc, area: &MemoryMapEntry) -> Option<*mut u8> {
+    Some(proc.physical_to_virtual_address::<u8>(PhysicalAddress::from_u64(area.base_addr)?))
 }
 
-#[allow(clippy::cast_possible_truncation)]
-fn memory_area_end(area: &MemoryMapEntry) -> usize {
-    (area.base_addr + area.length) as usize
+fn memory_area_end<Proc: Architecture>(proc: &Proc, area: &MemoryMapEntry) -> Option<*mut u8> {
+    Some(
+        proc.physical_to_virtual_address::<u8>(PhysicalAddress::from_u64(
+            area.base_addr + area.length,
+        )?),
+    )
 }
 
-fn memory_manager_executable(boot_info: BootInformation) -> Option<Range<usize>> {
+fn memory_manager_executable<Proc: Architecture>(
+    proc: &Proc,
+    boot_info: BootInformation,
+) -> Option<Range<*const u8>> {
     let memory_manager = boot_info
         .tags_of_type::<BootModuleTag>()
         .find(|module| module.string.contains("memory_manager"))?;
-    Some(memory_manager.mod_start as usize..memory_manager.mod_end as usize)
+    Some(
+        proc.physical_to_virtual_address(PhysicalAddress::from_u32(memory_manager.mod_start))
+            ..proc.physical_to_virtual_address(PhysicalAddress::from_u32(memory_manager.mod_end)),
+    )
 }
 
-fn intersect(a: Range<usize>, b: Range<usize>) -> Range<usize> {
+fn intersect(a: Range<*mut u8>, b: Range<*mut u8>) -> Range<*mut u8> {
     max(a.start, b.start)..min(a.end, b.end)
 }
 
-fn unused_memory_regions_from_area<'a, RangeIter: Iterator<Item = Range<usize>> + 'a>(
+fn unused_memory_regions_from_area<
+    'a,
+    RangeIter: Iterator<Item = Range<*mut u8>> + 'a,
+    Proc: Architecture,
+>(
+    proc: &Proc,
     memory_area: &'a MemoryMapEntry,
     unused_memory_regions: RangeIter,
-) -> impl Iterator<Item = Range<usize>> + 'a {
-    let area = memory_area_start(memory_area)..memory_area_end(memory_area);
-    unused_memory_regions
-        .map(move |region| intersect(area.clone(), region.clone()))
-        .filter(|region| !region.is_empty())
+) -> Option<impl Iterator<Item = Range<*mut u8>> + 'a> {
+    let area = memory_area_start(proc, memory_area)?..memory_area_end(proc, memory_area)?;
+    Some(
+        unused_memory_regions
+            .map(move |region| intersect(area.clone(), region.clone()))
+            .filter(|region| !region.is_empty()),
+    )
 }
 
 fn unused_memory_regions(
-    memory_regions_in_use: &mut [Range<usize>],
-    max_address: usize,
-) -> Option<impl Iterator<Item = Range<usize>> + Clone + '_> {
+    memory_regions_in_use: &mut [Range<*const u8>],
+    max_address: *const u8,
+) -> Option<impl Iterator<Item = Range<*mut u8>> + Clone + '_> {
     memory_regions_in_use.sort_unstable_by(|a, b| a.start.cmp(&b.start));
     Some(
-        once(0..memory_regions_in_use.first()?.start)
+        once(ptr::null()..memory_regions_in_use.first()?.start)
             .chain(
                 memory_regions_in_use
                     .windows(2)
                     .map(|window| window[0].end..window[1].start),
             )
-            .chain(once(memory_regions_in_use.last()?.end..max_address)),
+            .chain(once(memory_regions_in_use.last()?.end..max_address))
+            .map(|region| region.start.cast_mut()..region.end.cast_mut()),
     )
 }
 

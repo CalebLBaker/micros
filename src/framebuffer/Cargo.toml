@@ -7,3 +7,4 @@ license = "BSL-1.0"
 
 [dependencies]
 multiboot2 = { path = "../multiboot2" }
+physical_address = { path = "../physical_address" }

@@ -1,10 +1,13 @@
 #![no_std]
+#![deny(clippy::all)]
+#![deny(clippy::pedantic)]
 
 use core::{
     mem::{align_of, size_of},
     ops::Range,
     slice, str,
 };
+use physical_address::PhysicalAddress;
 
 /// The value of the `region_type` field for `MemoryMapEntry`'s that represent available memory.
 pub const AVAILABLE_MEMORY: u32 = 1;
@@ -121,10 +124,16 @@ impl<'a> MutibootTag<'a> for BootModuleTag<'a> {
     const TAG_TYPE: u32 = 3;
 }
 
+pub enum FramebufferTagError {
+    EndOfData,
+    MisalignedData,
+    InvalidAddress,
+}
+
 /// A multiboot2 info tag containing information about the framebuffer
 pub struct FramebufferTag<'a> {
     /// A pointer to the framebuffer
-    pub framebuffer: *mut u8,
+    pub framebuffer: PhysicalAddress,
     /// The size of a row in the framebuffer in bytes
     pub pitch: u32,
     /// The size of a row in the framebuffer in pixels
@@ -141,18 +150,20 @@ pub struct FramebufferTag<'a> {
 }
 
 impl<'a> TryFrom<&'a [u8]> for FramebufferTag<'a> {
-    type Error = ();
+    type Error = FramebufferTagError;
 
     fn try_from(value: &'a [u8]) -> Result<Self, Self::Error> {
         let header_len = size_of::<FramebufferTagHeader>();
         if value.len() < header_len {
-            Err(())
+            Err(Self::Error::EndOfData)
         } else {
             let header = unsafe {
-                &*aligned_pointer_cast::<FramebufferTagHeader>(value.as_ptr()).ok_or(())?
+                &*aligned_pointer_cast::<FramebufferTagHeader>(value.as_ptr())
+                    .ok_or(Self::Error::MisalignedData)?
             };
             Ok(Self {
-                framebuffer: header.framebuffer as *mut u8,
+                framebuffer: PhysicalAddress::from_u64(header.framebuffer)
+                    .ok_or(Self::Error::InvalidAddress)?,
                 pitch: header.pitch,
                 width: header.width,
                 height: header.height,
@@ -184,12 +195,12 @@ impl<'a> BootInformation<'a> {
     /// # Safety
     ///
     /// `boot_info_ptr` must point to a valid multiboot2 boot information structure
-    pub unsafe fn new(boot_info_ptr: *const u8) -> Self {
+    #[must_use]
+    pub unsafe fn new(boot_info_ptr: *const BootInformationHeader) -> Self {
         unsafe {
-            let boot_info_size =
-                (*(boot_info_ptr as *const BootInformationHeader)).total_size as usize;
+            let boot_info_size = (*boot_info_ptr).total_size as usize;
             BootInformation {
-                tags: slice::from_raw_parts(boot_info_ptr, boot_info_size)
+                tags: slice::from_raw_parts(boot_info_ptr.cast::<u8>(), boot_info_size)
                     .split_at_unchecked(size_of::<BootInformationHeader>())
                     .1,
             }
@@ -206,9 +217,12 @@ impl<'a> BootInformation<'a> {
         })
     }
 
-    pub fn address_range(self) -> Range<usize> {
+    #[must_use]
+    pub fn address_range(self) -> Range<*const u8> {
         let tag_range = self.tags.as_ptr_range();
-        tag_range.start as usize - size_of::<BootInformationHeader>()..tag_range.end as usize
+        tag_range
+            .start
+            .wrapping_sub(size_of::<BootInformationHeader>())..tag_range.end
     }
 }
 
@@ -254,6 +268,7 @@ impl<'a> Iterator for MultibootTagIterator<'a> {
     }
 }
 
+#[must_use]
 pub fn aligned_pointer_cast<T>(pointer: *const u8) -> Option<*const T> {
     let new_pointer = pointer.cast::<T>();
     if new_pointer.is_aligned() {

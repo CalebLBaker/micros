@@ -9,5 +9,8 @@ license = "BSL-1.0"
 crate-type = ["staticlib"]
 
 [dependencies]
+elf = { path = "../elf" }
 frame_allocation = { path = "../frame_allocation" }
 multiboot2 = { path = "../multiboot2" }
+physical_address = { path = "../physical_address" }
+architecture = { path = "../architecture" }

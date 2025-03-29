@@ -103,7 +103,7 @@ reset_code_segment:
     retfq
 
 ; Args:
-; rdi: virtual address of root Amd64FrameAllocator structure
+; rdi: virtual address of root Amd64 structure
 ; rsi: virtual address of the multiboot2 information struct
 ; rdx: physical address of root page table for memory manager
 ; rcx: virtual address of memory manager main function

@@ -1,13 +1,13 @@
 mod apic;
 mod arch;
-mod elf;
 mod init;
 
 use arch::PageTable;
+use architecture::amd64::Amd64;
 use core::panic::PanicInfo;
-use frame_allocation::amd64::Amd64FrameAllocator;
 pub use init::initialize_operating_system;
 use init::{GdtDescriptor, IdtDescriptor, InterruptServiceRoutine};
+use multiboot2::BootInformationHeader;
 
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
@@ -21,8 +21,8 @@ unsafe extern "C" {
     static mut p2_tables: [PageTable; 2];
     static mut p1_table_for_stack: PageTable;
     fn launch_memory_manager(
-        allocator: *mut Amd64FrameAllocator,
-        boot_info_ptr: *const u8,
+        arch: *mut Amd64,
+        boot_info_ptr: *const BootInformationHeader,
         root_page_table_address: usize,
         entry_point: usize,
     ) -> !;

@@ -1,7 +1,8 @@
 use super::{set_apic_base, write_port};
+use physical_address::PhysicalAddress;
 
-pub const LOCAL_APIC_START: usize = 0xFEE0_0000;
-pub const LOCAL_APIC_END: usize = 0xFEE0_1000;
+pub const LOCAL_APIC_START: PhysicalAddress = PhysicalAddress::new(0xFEE0_0000);
+pub const LOCAL_APIC_END: PhysicalAddress = PhysicalAddress::new(0xFEE0_1000);
 
 #[derive(Debug, Clone, Copy)]
 #[repr(u8)]

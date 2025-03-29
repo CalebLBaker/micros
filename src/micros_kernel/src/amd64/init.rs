@@ -11,7 +11,12 @@ use crate::{
 };
 use apic::{InterruptIndex, LOCAL_APIC_END, LOCAL_APIC_START};
 use core::ptr;
-use frame_allocation::{FfiOption, FrameAllocator, amd64::FOUR_KILOBYTES};
+use frame_allocation::{
+    FfiOption, FrameAllocator,
+    amd64::{FOUR_KILOBYTES, FourKbFrame},
+};
+use multiboot2::BootInformationHeader;
+use physical_address::AddressMapper;
 use ptr::{addr_of, addr_of_mut};
 
 #[repr(C, packed(2))]
@@ -47,18 +52,22 @@ pub unsafe fn initialize_operating_system(multiboot_info_ptr: u32, cpu_info: u32
         if supports_gigabyte_pages(cpu_info) {
             proc.allocator
                 .four_kilobyte_pages
-                .add_frame(addr_of!(p2_tables[0]) as usize);
+                .add_frame(addr_of!(p2_tables[0]) as *mut FourKbFrame);
             proc.allocator
                 .four_kilobyte_pages
-                .add_frame(addr_of!(p2_tables[1]) as usize);
+                .add_frame(addr_of!(p2_tables[1]) as *mut FourKbFrame);
             proc.allocator.gigabyte_pages = FfiOption::Some(FrameAllocator::default());
         }
-        let boot_info_ptr = multiboot_info_ptr as *const u8;
-        let memory_manager_launch_info =
-            boot_os(proc, boot_info_ptr, LOCAL_APIC_START..LOCAL_APIC_END)?;
+        let boot_info_ptr = multiboot_info_ptr as *const BootInformationHeader;
+        let memory_manager_launch_info = boot_os(
+            proc,
+            boot_info_ptr,
+            proc.physical_to_virtual_address(LOCAL_APIC_START)
+                ..proc.physical_to_virtual_address(LOCAL_APIC_END),
+        )?;
 
         launch_memory_manager(
-            addr_of_mut!(proc.allocator),
+            ptr::from_mut(proc),
             boot_info_ptr,
             memory_manager_launch_info.root_page_table_address,
             memory_manager_launch_info.entry_point,

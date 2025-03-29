@@ -1,112 +1,100 @@
-use crate::{
-    Architecture, SegmentFlags,
-    amd64::{elf, p4_table},
-    copy_and_zero_fill, slice_with_bounds_check,
-};
+use crate::{ArchitectureKernel, amd64::p4_table, copy_and_zero_fill, slice_with_bounds_check};
+use architecture::amd64::Amd64;
 use core::{
     iter::{Skip, Take},
     ops::{BitOr, Index, IndexMut, Range},
-    ptr::addr_of,
     slice,
 };
-use elf::ProgramHeader;
+use elf::{SegmentFlags, elf64};
+use elf64::ProgramHeader;
 use frame_allocation::{
-    FfiOption, FrameAllocator,
-    amd64::{Amd64FrameAllocator, FOUR_KILOBYTES, GIGABYTE},
-    end_of_last_full_page, first_full_page_address,
+    FfiOption, FrameAllocator, MemoryFrame,
+    amd64::{Amd64FrameAllocator, FOUR_KILOBYTES, FourKbFrame, GbFrame},
 };
+use physical_address::{AddressMapper, PhysicalAddress};
 
-pub static mut PROC: Amd64 = Amd64 {
-    allocator: Amd64FrameAllocator {
+pub static mut PROC: Amd64 = Amd64::new(
+    Amd64FrameAllocator {
         four_kilobyte_pages: FrameAllocator::new(),
         two_megabyte_pages: FrameAllocator::new(),
         gigabyte_pages: FfiOption::None,
     },
-};
+    0,
+);
 
-pub struct Amd64 {
-    pub allocator: Amd64FrameAllocator,
-}
+unsafe fn copy_into_address_space(
+    proc: &mut Amd64,
+    page_table_level: u8,
+    page_table: &mut PageTable,
+    mut address: usize,
+    data: &[u8],
+    size: usize,
+    flags: SegmentFlags,
+) -> Option<()> {
+    let mut data_offset = 0;
+    for entry in page_table.entries(page_table_level, address, size) {
+        let page = if entry.is_empty() {
+            let page_address = unsafe { proc.allocator.get_4k_frame() }?;
+            set_page_table_entry(entry, page_address, flags);
+            unsafe { page_address.write_bytes(0, 1) };
+            page_address
+        } else {
+            update_page_table_entry_flags(entry, flags);
+            proc.physical_to_virtual_address::<FourKbFrame>(entry.address())
+        };
+        let page_offset = offset_in_page(page_table_level, address);
+        let bytes_for_page =
+            number_of_bytes_for_page(page_table_level, page_offset, size, data_offset);
+        let data_for_entry = slice_with_bounds_check(data, data_offset, bytes_for_page);
 
-impl Amd64 {
-    // This code is explicitly only enabled for 64 bit processors, so casting from u64 to usize is
-    // safe here.
-    #[allow(clippy::cast_possible_truncation)]
-    unsafe fn copy_into_address_space(
-        &mut self,
-        page_table_level: u8,
-        page_table: &mut PageTable,
-        mut address: usize,
-        data: &[u8],
-        size: usize,
-        flags: SegmentFlags,
-    ) -> Option<()> {
-        let mut data_offset = 0;
-        for entry in page_table.entries(page_table_level, address, size) {
-            let page = if entry.is_empty() {
-                let page_address = unsafe { self.allocator.get_4k_frame() }?;
-                set_page_table_entry(entry, page_address, flags);
-                unsafe { (page_address as *mut u8).write_bytes(0, FOUR_KILOBYTES) };
-                page_address
-            } else {
-                update_page_table_entry_flags(entry, flags);
-                entry.address() as usize
-            };
-            let page_offset = offset_in_page(page_table_level, address);
-            let bytes_for_page =
-                number_of_bytes_for_page(page_table_level, page_offset, size, data_offset);
-            let data_for_entry = slice_with_bounds_check(data, data_offset, bytes_for_page);
-
-            if page_table_level == 0 || entry.has_flags(PageTableFlags::HUGE_PAGE) {
-                copy_and_zero_fill(
-                    unsafe {
-                        slice::from_raw_parts_mut((page + page_offset) as *mut u8, bytes_for_page)
-                    },
-                    data_for_entry,
-                );
-            } else {
+        if page_table_level == 0 || entry.has_flags(PageTableFlags::HUGE_PAGE) {
+            copy_and_zero_fill(
                 unsafe {
-                    let sub_page_table = &mut *(page as *mut PageTable);
-                    self.copy_into_address_space(
-                        page_table_level - 1,
-                        sub_page_table,
-                        address,
-                        data_for_entry,
-                        bytes_for_page,
-                        flags,
-                    )?;
-                }
+                    slice::from_raw_parts_mut((page.cast::<u8>()).add(page_offset), bytes_for_page)
+                },
+                data_for_entry,
+            );
+        } else {
+            unsafe {
+                let sub_page_table = &mut *(page.cast::<PageTable>());
+                copy_into_address_space(
+                    proc,
+                    page_table_level - 1,
+                    sub_page_table,
+                    address,
+                    data_for_entry,
+                    bytes_for_page,
+                    flags,
+                )?;
             }
-            data_offset += bytes_for_page;
-            address += bytes_for_page;
         }
-        Some(())
+        data_offset += bytes_for_page;
+        address += bytes_for_page;
     }
+    Some(())
 }
 
-impl Architecture for Amd64 {
-    const INITIAL_VIRTUAL_MEMORY_SIZE: usize = 0x1_0000_0000;
-
+impl ArchitectureKernel for Amd64 {
     type PageTable = PageTable;
 
-    type ExecutableHeader = elf::Header;
+    type ExecutableHeader = elf64::Header;
 
     type SegmentHeader = ProgramHeader;
 
     unsafe fn initialize_memory_manager_page_tables(&mut self) -> Option<*mut Self::PageTable> {
         unsafe {
-            let root_table_pointer = self.allocator.get_4k_frame()? as *mut PageTable;
+            let root_table_pointer = self.allocator.get_4k_frame()?.cast::<PageTable>();
             let root_table = &mut (*root_table_pointer);
             root_table.clear();
-            root_table[0] = (*addr_of!(p4_table))[0];
+            root_table[0] = p4_table[0];
 
             let p3_table_addr = self.allocator.get_4k_frame()?;
-            let p3_table = p3_table_addr as *mut PageTable;
+            let p3_table = p3_table_addr.cast::<PageTable>();
             let flags = user_accessible_page() | PageTableFlags::WRITABLE;
             set_last_entry(root_table, p3_table_addr, flags);
 
             let p2_table_addr = self.allocator.get_4k_frame()?;
-            let p2_table = p2_table_addr as *mut PageTable;
+            let p2_table = p2_table_addr.cast::<PageTable>();
             clear_and_set_last_entry(&mut *p3_table, p2_table_addr, flags);
 
             if let Some(huge_stack) = self.allocator.get_2mb_frame() {
@@ -118,7 +106,7 @@ impl Architecture for Amd64 {
             } else {
                 let stack_flags = flags | PageTableFlags::NO_EXECUTE;
                 let p1_table_addr = self.allocator.get_4k_frame()?;
-                let p1_table = p1_table_addr as *mut PageTable;
+                let p1_table = p1_table_addr.cast::<PageTable>();
                 clear_and_set_last_entry(&mut *p2_table, p1_table_addr, flags);
 
                 clear_and_set_last_entry(
@@ -147,7 +135,7 @@ impl Architecture for Amd64 {
             }
 
             let p1_table_addr = self.allocator.get_4k_frame()?;
-            let p1_table = p1_table_addr as *mut PageTable;
+            let p1_table = p1_table_addr.cast::<PageTable>();
             set_entry(
                 &mut *p2_table,
                 0x100,
@@ -165,24 +153,24 @@ impl Architecture for Amd64 {
         }
     }
 
-    unsafe fn register_memory_region(&mut self, memory_region: Range<usize>) {
+    unsafe fn register_memory_region(&mut self, memory_region: Range<*mut u8>) {
         if let FfiOption::Some(ref mut gb_allocator) = self.allocator.gigabyte_pages {
-            let first_gb_page = first_full_page_address(memory_region.start, GIGABYTE);
-            let end_of_last_gb_page = end_of_last_full_page(memory_region.end, GIGABYTE);
+            let first_gb_page = GbFrame::first_full_page(memory_region.start);
+            let end_of_last_gb_page = GbFrame::end_of_last_full_page(memory_region.end);
             if end_of_last_gb_page > first_gb_page {
                 unsafe {
                     self.allocator
                         .two_megabyte_pages
                         .add_aligned_frames_with_scrap_allocator(
                             &mut self.allocator.four_kilobyte_pages,
-                            memory_region.start..first_gb_page,
+                            memory_region.start..(first_gb_page.cast::<u8>()),
                         );
                     gb_allocator.add_frames(first_gb_page..end_of_last_gb_page);
                     self.allocator
                         .two_megabyte_pages
                         .add_aligned_frames_with_scrap_allocator(
                             &mut self.allocator.four_kilobyte_pages,
-                            end_of_last_gb_page..end_of_last_gb_page,
+                            (end_of_last_gb_page.cast::<u8>())..memory_region.end,
                         );
                 }
                 return;
@@ -206,11 +194,15 @@ impl Architecture for Amd64 {
         size: usize,
         flags: SegmentFlags,
     ) -> Option<()> {
-        unsafe { self.copy_into_address_space(3, root_page_table, address, data, size, flags) }
+        unsafe { copy_into_address_space(self, 3, root_page_table, address, data, size, flags) }
+    }
+
+    fn virtual_memory_end(&self) -> *const u8 {
+        self.physical_to_virtual_address(PhysicalAddress::new(0x1_0000_0000))
     }
 }
 
-#[repr(C)]
+#[repr(C, align(0x1000))]
 pub struct PageTable {
     entries: [PageTableEntry; 512],
 }
@@ -266,8 +258,8 @@ impl PageTableEntry {
         self.entry == 0
     }
 
-    const fn address(self) -> u64 {
-        self.entry & PAGE_TABLE_ENTRY_ADDRESS_MASK
+    const fn address(self) -> PhysicalAddress {
+        PhysicalAddress::new((self.entry & PAGE_TABLE_ENTRY_ADDRESS_MASK) as usize)
     }
 
     const fn has_flags(self, flags: PageTableFlags) -> bool {
@@ -296,7 +288,7 @@ impl BitOr for PageTableFlags {
 
 fn set_page_table_entry(
     page_table_entry: &mut PageTableEntry,
-    address: usize,
+    address: *const FourKbFrame,
     segment_flags: SegmentFlags,
 ) {
     let mut page_flags = user_accessible_page();
@@ -342,16 +334,29 @@ fn user_accessible_page() -> PageTableFlags {
     PageTableFlags::PRESENT | PageTableFlags::USER_ACCESSIBLE
 }
 
-fn clear_and_set_last_entry(page_table: &mut PageTable, address: usize, flags: PageTableFlags) {
+fn clear_and_set_last_entry<T: MemoryFrame>(
+    page_table: &mut PageTable,
+    address: *const T,
+    flags: PageTableFlags,
+) {
     page_table.clear();
     set_last_entry(page_table, address, flags);
 }
 
-fn set_last_entry(page_table: &mut PageTable, address: usize, flags: PageTableFlags) {
+fn set_last_entry<T: MemoryFrame>(
+    page_table: &mut PageTable,
+    address: *const T,
+    flags: PageTableFlags,
+) {
     set_entry(page_table, 0x1ff, address, flags);
 }
 
-fn set_entry(page_table: &mut PageTable, index: u16, address: usize, flags: PageTableFlags) {
+fn set_entry<T: MemoryFrame>(
+    page_table: &mut PageTable,
+    index: u16,
+    address: *const T,
+    flags: PageTableFlags,
+) {
     page_table[index] = PageTableEntry::new(address as u64, flags);
 }
 

@@ -1,7 +1,10 @@
 #![no_std]
+#![deny(clippy::all)]
+#![deny(clippy::pedantic)]
 
 use core::{mem::size_of, slice};
 use multiboot2::{FramebufferTag, aligned_pointer_cast};
+use physical_address::AddressMapper;
 
 pub enum Framebuffer<'a> {
     IndexedColor(IndexedColorFramebuffer<'a>),
@@ -13,10 +16,16 @@ impl<'a> Framebuffer<'a> {
     /// # Safety
     ///
     /// To avoid constructing an invalid framebuffer, the information contained in `tag` must be completely accurate.
-    pub unsafe fn new(tag: FramebufferTag<'a>) -> Option<Self> {
+    pub unsafe fn new<AddrMap: AddressMapper>(
+        address_mapper: &AddrMap,
+        tag: FramebufferTag<'a>,
+    ) -> Option<Self> {
         let core = FramebufferCore {
             framebuffer: unsafe {
-                slice::from_raw_parts_mut(tag.framebuffer, tag.pitch as usize * tag.height as usize)
+                slice::from_raw_parts_mut(
+                    address_mapper.physical_to_virtual_address(tag.framebuffer),
+                    tag.pitch as usize * tag.height as usize,
+                )
             },
             pitch: tag.pitch,
             width: tag.width,
@@ -71,10 +80,13 @@ pub struct StandardRgbFramebuffer<'a> {
 }
 
 impl<'a> StandardRgbFramebuffer<'a> {
+    #[must_use]
     pub fn new(framebuffer: Framebuffer<'a>) -> Option<Self> {
         match framebuffer {
             Framebuffer::RgbColor(buffer) => {
-                if buffer.core.bits_per_pixel <= 0x40 && (buffer.core.bits_per_pixel & 7) == 0 {
+                if buffer.core.bits_per_pixel <= 0x40
+                    && buffer.core.bits_per_pixel.trailing_zeros() >= 3
+                {
                     Some(Self {
                         framebuffer: buffer.core.framebuffer,
                         pitch: buffer.core.pitch,
@@ -94,8 +106,11 @@ impl<'a> StandardRgbFramebuffer<'a> {
     /// # Safety
     ///
     /// To avoid constructing an invalid framebuffer, the information contained in `tag` must be completely accurate.
-    pub unsafe fn from_tag(tag: FramebufferTag<'a>) -> Option<Self> {
-        Self::new(unsafe { Framebuffer::new(tag) }?)
+    pub unsafe fn from_tag<AddrMap: AddressMapper>(
+        address_mapper: &AddrMap,
+        tag: FramebufferTag<'a>,
+    ) -> Option<Self> {
+        Self::new(unsafe { Framebuffer::new(address_mapper, tag) }?)
     }
 
     pub fn draw_pixel(&mut self, row: u32, column: u32, color: [u8; 8]) {

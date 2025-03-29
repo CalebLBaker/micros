@@ -1,13 +1,11 @@
 [package]
-name = "micros_memory_manager"
-version = "0.2.2"
+name = "architecture"
+version = "0.1.0"
 edition = "2024"
 authors = ["Caleb Baker <calebbaker774@gmail.com>"]
 license = "BSL-1.0"
 
 [dependencies]
 frame_allocation = { path = "../frame_allocation" }
-multiboot2 = { path = "../multiboot2" }
-framebuffer = { path = "../framebuffer" }
 physical_address = { path = "../physical_address" }
-architecture = { path = "../architecture" }
+

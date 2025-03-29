@@ -4,6 +4,9 @@ members = [
     "src/micros_memory_manager",
     "src/micros_kernel", "src/frame_allocation", "src/multiboot2",
     "src/framebuffer",
+    "src/physical_address",
+    "src/elf",
+    "src/architecture",
 ]
 resolver = "2"
 

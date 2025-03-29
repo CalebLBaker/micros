@@ -1,9 +1,8 @@
 [package]
-name = "multiboot2"
-version = "0.1.2"
+name = "elf"
+version = "0.1.0"
 edition = "2024"
 authors = ["Caleb Baker <calebbaker774@gmail.com>"]
 license = "BSL-1.0"
 
 [dependencies]
-physical_address = { path = "../physical_address" }

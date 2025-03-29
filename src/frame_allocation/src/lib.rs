@@ -1,4 +1,6 @@
 #![no_std]
+#![deny(clippy::all)]
+#![deny(clippy::pedantic)]
 
 #[cfg(target_arch = "x86_64")]
 pub mod amd64;
@@ -23,14 +25,34 @@ impl<T> FfiOption<T> {
     }
 }
 
-/// A memory allocator that allocates memory in fixed-sized frames
-#[repr(C)]
-pub struct FrameAllocator<const FRAME_SIZE: usize> {
-    next: FfiOption<*mut FrameAllocator<FRAME_SIZE>>,
+pub trait MemoryFrame: Sized {
+    /// Calculates the address of the first page that starts at or after `start_address`.
+    #[must_use]
+    fn first_full_page(start_address: *mut u8) -> *mut Self {
+        start_address
+            .wrapping_add(start_address.align_offset(size_of::<Self>()))
+            .cast::<Self>()
+    }
+
+    /// Calculates the end address of the last page that ends at or before `end_address`.
+    #[must_use]
+    fn end_of_last_full_page(end_address: *mut u8) -> *mut Self {
+        if (end_address as usize) % size_of::<Self>() == 0 {
+            end_address.cast::<Self>()
+        } else {
+            unsafe { Self::first_full_page(end_address).sub(1) }
+        }
+    }
 }
 
-impl<const MEMORY_FRAME_SIZE: usize> FrameAllocator<MEMORY_FRAME_SIZE> {
-    const FRAME_SIZE: usize = MEMORY_FRAME_SIZE;
+/// A memory allocator that allocates memory in fixed-sized frames
+#[repr(C)]
+pub struct FrameAllocator<Frame: MemoryFrame> {
+    next: FfiOption<*mut FrameAllocator<Frame>>,
+}
+
+impl<Frame: MemoryFrame> FrameAllocator<Frame> {
+    const FRAME_SIZE: usize = size_of::<Frame>();
 
     /**
      * Adds available frames to the allocator
@@ -41,10 +63,12 @@ impl<const MEMORY_FRAME_SIZE: usize> FrameAllocator<MEMORY_FRAME_SIZE> {
      * `FRAME_SIZE`-aligned. If there are addresses in the range that don't represent valid memory
      * or represent memory that is already in use, then undefined behavior may occur.
      */
-    pub unsafe fn add_frames(&mut self, memory_area: Range<usize>) {
-        for frame in memory_area.step_by(Self::FRAME_SIZE) {
+    pub unsafe fn add_frames(&mut self, memory_area: Range<*mut Frame>) {
+        let mut frame = memory_area.start;
+        while frame < memory_area.end {
             unsafe {
                 self.add_frame(frame);
+                frame = frame.byte_add(Self::FRAME_SIZE);
             }
         }
     }
@@ -58,10 +82,10 @@ impl<const MEMORY_FRAME_SIZE: usize> FrameAllocator<MEMORY_FRAME_SIZE> {
      * undefined behavior if invalid or already-in-use memory regions have been added to the
      * allocator previously.
      */
-    unsafe fn get_frame(&mut self) -> Option<usize> {
+    unsafe fn get_frame(&mut self) -> Option<*mut Frame> {
         if let FfiOption::Some(ret) = self.next {
             self.next = unsafe { (*ret).next };
-            Some(ret as usize)
+            Some(ret.cast::<Frame>())
         } else {
             None
         }
@@ -75,8 +99,8 @@ impl<const MEMORY_FRAME_SIZE: usize> FrameAllocator<MEMORY_FRAME_SIZE> {
      * `frame_address` must represent the start of a frame of valid and available memory. If the
      * memory frame does not exist or is already in use then undefined behavior may occur.
      */
-    pub unsafe fn add_frame(&mut self, frame_address: usize) {
-        let frame_ptr = frame_address as *mut Self;
+    pub unsafe fn add_frame(&mut self, frame: *mut Frame) {
+        let frame_ptr = frame.cast::<Self>();
         unsafe {
             (*frame_ptr).next = self.next;
             self.next = FfiOption::Some(&mut *frame_ptr);
@@ -94,29 +118,30 @@ impl<const MEMORY_FRAME_SIZE: usize> FrameAllocator<MEMORY_FRAME_SIZE> {
      * in the range that don't represent valid memory or represent memory that is already in use,
      * then undefined behavior may occur.
      */
-    pub unsafe fn add_aligned_frames_with_scrap_allocator<const SMALLER_FRAME_SIZE: usize>(
+    pub unsafe fn add_aligned_frames_with_scrap_allocator<SmallerFrame: MemoryFrame>(
         &mut self,
-        smaller_allocator: &mut FrameAllocator<SMALLER_FRAME_SIZE>,
-        memory_region: Range<usize>,
+        smaller_allocator: &mut FrameAllocator<SmallerFrame>,
+        memory_region: Range<*mut u8>,
     ) {
-        let first_page = first_full_page_address(memory_region.start, Self::FRAME_SIZE);
-        let end_of_last_page = end_of_last_full_page(memory_region.end, Self::FRAME_SIZE);
+        let first_page = Frame::first_full_page(memory_region.start);
+        let end_of_last_page = Frame::end_of_last_full_page(memory_region.end);
         unsafe {
             if end_of_last_page > first_page {
-                smaller_allocator.add_aligned_frames(memory_region.start..first_page);
+                smaller_allocator.add_aligned_frames(memory_region.start..first_page.cast::<u8>());
                 self.add_frames(first_page..end_of_last_page);
-                smaller_allocator.add_aligned_frames(end_of_last_page..memory_region.end);
+                smaller_allocator
+                    .add_aligned_frames(end_of_last_page.cast::<u8>()..memory_region.end);
             } else {
                 smaller_allocator.add_aligned_frames(memory_region);
             }
         }
     }
 
-    unsafe fn add_aligned_frames(&mut self, memory_region: Range<usize>) {
+    unsafe fn add_aligned_frames(&mut self, memory_region: Range<*mut u8>) {
         unsafe {
             self.add_frames(
-                first_full_page_address(memory_region.start, Self::FRAME_SIZE)
-                    ..end_of_last_full_page(memory_region.end, Self::FRAME_SIZE),
+                Frame::first_full_page(memory_region.start)
+                    ..Frame::end_of_last_full_page(memory_region.end),
             );
         }
     }
@@ -130,25 +155,8 @@ impl<const MEMORY_FRAME_SIZE: usize> FrameAllocator<MEMORY_FRAME_SIZE> {
     }
 }
 
-impl<const FRAME_SIZE: usize> Default for FrameAllocator<FRAME_SIZE> {
+impl<Frame: MemoryFrame> Default for FrameAllocator<Frame> {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-/// Calculates the end address of the last page that ends at or before `end_address`.
-#[must_use]
-pub fn end_of_last_full_page(end_address: usize, page_size: usize) -> usize {
-    end_address - end_address % page_size
-}
-
-/// Calculates the address of the first page that starts at or after `start_address`.
-#[must_use]
-pub fn first_full_page_address(start_address: usize, page_size: usize) -> usize {
-    let page_offset = start_address % page_size;
-    if page_offset == 0 {
-        start_address
-    } else {
-        start_address + page_size - page_offset
     }
 }
