@@ -1,5 +1,5 @@
 use super::{set_apic_base, write_port};
-use physical_address::PhysicalAddress;
+use address::{AddressMapper, PhysicalAddress};
 
 pub const LOCAL_APIC_START: PhysicalAddress = PhysicalAddress::new(0xFEE0_0000);
 pub const LOCAL_APIC_END: PhysicalAddress = PhysicalAddress::new(0xFEE0_1000);
@@ -12,14 +12,17 @@ pub enum InterruptIndex {
     Spurious = SPURIOUS_INTERRUPT_VECTOR_INDEX,
 }
 
-pub unsafe fn init() {
+pub unsafe fn init<A: AddressMapper>(map: &A) {
     unsafe {
         disable_pic(MASTER_PIC, MASTER_PIC_OFFSET, SLAVE_PICS_MASK);
         disable_pic(SLAVE_PIC, SLAVE_PIC_OFFSET, SLAVE_PIC_IDENTITY);
         set_apic_base();
-        TIMER_REGISTER.write_volatile(TIMER_REGISTER_VALUE);
-        ERROR_REGISTER.write_volatile(InterruptIndex::Error as u8);
-        SPURIOUS_INTERRUPT_REGISTER.write_volatile(SPURIOUS_INTERRUPT_REGISTER_VALUE);
+        map.physical_address_to_pointer::<u32>(TIMER_REGISTER)
+            .write_volatile(TIMER_REGISTER_VALUE);
+        map.physical_address_to_pointer::<u8>(ERROR_REGISTER)
+            .write_volatile(InterruptIndex::Error as u8);
+        map.physical_address_to_pointer::<u32>(SPURIOUS_INTERRUPT_REGISTER)
+            .write_volatile(SPURIOUS_INTERRUPT_REGISTER_VALUE);
     }
 }
 
@@ -49,6 +52,6 @@ const APIC_OFFSET: u8 = 0x30;
 const SPURIOUS_INTERRUPT_VECTOR_INDEX: u8 = 0xFF;
 const SPURIOUS_INTERRUPT_REGISTER_VALUE: u32 = 0x1FF;
 const TIMER_REGISTER_VALUE: u32 = 0x10000 | InterruptIndex::Timer as u32;
-const SPURIOUS_INTERRUPT_REGISTER: *mut u32 = 0xFEE0_00F0 as *mut u32;
-const TIMER_REGISTER: *mut u32 = 0xFEE0_0320 as *mut u32;
-const ERROR_REGISTER: *mut u8 = 0xFEE0_0370 as *mut u8;
+const SPURIOUS_INTERRUPT_REGISTER: PhysicalAddress = PhysicalAddress::new(0xFEE0_00F0);
+const TIMER_REGISTER: PhysicalAddress = PhysicalAddress::new(0xFEE0_0320);
+const ERROR_REGISTER: PhysicalAddress = PhysicalAddress::new(0xFEE0_0370);

@@ -5,26 +5,28 @@
 #[cfg(target_arch = "x86_64")]
 mod amd64;
 
+use address::{PhysicalAddress, VirtualAddress};
 use architecture::Architecture;
 use core::{
     cmp::{max, min},
     iter::once,
+    num::TryFromIntError,
     ops::Range,
     ptr, slice,
 };
-use elf::{ELF_LOADABLE_SEGMENT, ExecutableHeader, SegmentFlags, SegmentHeader};
+use elf::{ExecutableHeader, SegmentFlags, SegmentHeader, SegmentType};
 use multiboot2::{
-    ACPI_MEMORY, AVAILABLE_MEMORY, BootInformation, BootInformationHeader, BootModuleTag,
-    FramebufferTag, MemoryMapEntry, MemoryMapTag,
+    BootInformation, BootInformationHeader, BootModuleTag, FramebufferTag, MemoryMapEntry,
+    MemoryMapTag,
+    MemoryRegionType::{AcpiMemory, AvailableMemory},
 };
-use physical_address::PhysicalAddress;
 use ptr::addr_of;
 
 #[cfg(target_arch = "x86_64")]
 #[unsafe(no_mangle)]
 pub extern "C" fn main(multiboot_info_ptr: u32, cpu_info: u32) -> ! {
     unsafe {
-        amd64::initialize_operating_system(multiboot_info_ptr, cpu_info);
+        let _ = amd64::initialize_operating_system(multiboot_info_ptr, cpu_info);
         amd64::halt()
     }
 }
@@ -43,7 +45,7 @@ trait ArchitectureKernel: Architecture {
     unsafe fn copy_into_address_space(
         &mut self,
         root_page_table: &mut Self::PageTable,
-        address: usize,
+        address: VirtualAddress,
         data: &[u8],
         size: usize,
         flags: SegmentFlags,
@@ -53,20 +55,32 @@ trait ArchitectureKernel: Architecture {
 }
 
 struct ProcessLaunchInfo {
-    root_page_table_address: usize,
-    entry_point: usize,
+    root_page_table_address: PhysicalAddress,
+    entry_point: VirtualAddress,
+}
+
+enum BootError {
+    MemoryManagerNotLoaded = 0,
+    NoMemoryMap,
+    InvalidAddress,
+    OutOfMemory,
+    InvalidElfFile,
+    NegativeBootModuleSize,
+    InvalidElfSegment,
+    KernelBugMemoryRegionsInUseEmpty,
 }
 
 unsafe fn boot_os<Proc: ArchitectureKernel>(
     proc: &mut Proc,
     multiboot_info_ptr: *const BootInformationHeader,
     architecture_specific_reserved_memory: Range<*const u8>,
-) -> Option<ProcessLaunchInfo> {
+) -> Result<ProcessLaunchInfo, BootError> {
     // Initialize available memory and set up page tables
     let boot_info = unsafe { BootInformation::new(multiboot_info_ptr) };
 
     // Add free frames from first 4 GB to available frame list
-    let memory_manager_bounds = memory_manager_executable(proc, boot_info)?;
+    let memory_manager_bounds =
+        memory_manager_executable(proc, boot_info).ok_or(BootError::MemoryManagerNotLoaded)?;
 
     let mut memory_regions_in_use_arr = [
         addr_of!(header_start)..addr_of!(kernel_end),
@@ -77,7 +91,7 @@ unsafe fn boot_os<Proc: ArchitectureKernel>(
     ];
     let memory_regions_in_use =
         if let Some(framebuffer_tag) = boot_info.tags_of_type::<FramebufferTag>().next() {
-            let framebuffer_addr = proc.physical_to_virtual_address(framebuffer_tag.framebuffer);
+            let framebuffer_addr = proc.physical_address_to_pointer(framebuffer_tag.framebuffer);
             memory_regions_in_use_arr[4] = framebuffer_addr
                 ..framebuffer_addr
                     .wrapping_add(framebuffer_tag.height as usize * framebuffer_tag.pitch as usize);
@@ -86,11 +100,18 @@ unsafe fn boot_os<Proc: ArchitectureKernel>(
             &mut memory_regions_in_use_arr[0..4]
         };
     let available_memory_regions =
-        unused_memory_regions(memory_regions_in_use, proc.virtual_memory_end())?;
+        unused_memory_regions(memory_regions_in_use, proc.virtual_memory_end())
+            .ok_or(BootError::KernelBugMemoryRegionsInUseEmpty)?;
 
-    for memory_area in available_memory_areas(boot_info.tags_of_type::<MemoryMapTag>().next()?) {
+    for memory_area in available_memory_areas(
+        boot_info
+            .tags_of_type::<MemoryMapTag>()
+            .next()
+            .ok_or(BootError::NoMemoryMap)?,
+    ) {
         for memory_region in
-            unused_memory_regions_from_area(proc, memory_area, available_memory_regions.clone())?
+            unused_memory_regions_from_area(proc, memory_area, available_memory_regions.clone())
+                .map_err(|_| BootError::InvalidAddress)?
         {
             unsafe {
                 proc.register_memory_region(memory_region);
@@ -120,8 +141,11 @@ unsafe extern "C" {
 unsafe fn load_memory_manager<Proc: ArchitectureKernel>(
     proc: &mut Proc,
     exectuable_location: Range<*const u8>,
-) -> Option<ProcessLaunchInfo> {
-    let memory_manager_root_page_table = unsafe { proc.initialize_memory_manager_page_tables()? };
+) -> Result<ProcessLaunchInfo, BootError> {
+    let memory_manager_root_page_table = unsafe {
+        proc.initialize_memory_manager_page_tables()
+            .ok_or(BootError::OutOfMemory)?
+    };
 
     let memory_manager_elf_header =
         unsafe { &*(exectuable_location.start.cast::<Proc::ExecutableHeader>()) };
@@ -132,9 +156,9 @@ unsafe fn load_memory_manager<Proc: ArchitectureKernel>(
             .offset_from(exectuable_location.start)
     }
     .try_into()
-    .ok()?;
+    .map_err(|_| BootError::NegativeBootModuleSize)?;
     if !memory_manager_elf_header.is_valid(executable_size) {
-        return None;
+        return Err(BootError::InvalidElfFile);
     }
 
     for segment_header in unsafe {
@@ -147,42 +171,50 @@ unsafe fn load_memory_manager<Proc: ArchitectureKernel>(
         )
     }
     .iter()
-    .filter(|header| header.segment_type() == ELF_LOADABLE_SEGMENT)
+    .filter(|header| header.segment_type() == SegmentType::Loadable)
     {
         if segment_header.offset() + segment_header.file_size() > executable_size
             || segment_header.file_size() > segment_header.memory_size()
         {
-            return None;
+            return Err(BootError::InvalidElfSegment);
         }
         unsafe {
-            proc.copy_into_address_space(
-                &mut *memory_manager_root_page_table,
-                segment_header.address(),
-                slice::from_raw_parts(
-                    exectuable_location.start.add(segment_header.offset()),
-                    segment_header.file_size(),
-                ),
-                segment_header.memory_size(),
-                segment_header.flags(),
-            )
+            let _ = proc
+                .copy_into_address_space(
+                    &mut *memory_manager_root_page_table,
+                    segment_header.address(),
+                    slice::from_raw_parts(
+                        exectuable_location.start.add(segment_header.offset()),
+                        segment_header.file_size(),
+                    ),
+                    segment_header.memory_size(),
+                    segment_header.flags(),
+                )
+                .ok_or(BootError::OutOfMemory);
         };
     }
 
-    Some(ProcessLaunchInfo {
-        root_page_table_address: memory_manager_root_page_table as usize,
+    Ok(ProcessLaunchInfo {
+        root_page_table_address: proc.pointer_to_physical_address(memory_manager_root_page_table),
         entry_point: memory_manager_elf_header.entry(),
     })
 }
 
-fn memory_area_start<Proc: Architecture>(proc: &Proc, area: &MemoryMapEntry) -> Option<*mut u8> {
-    Some(proc.physical_to_virtual_address::<u8>(PhysicalAddress::from_u64(area.base_addr)?))
+fn memory_area_start<Proc: Architecture>(
+    proc: &Proc,
+    area: &MemoryMapEntry,
+) -> Result<*mut u8, TryFromIntError> {
+    Ok(proc.physical_address_to_pointer::<u8>(area.base_address()?))
 }
 
-fn memory_area_end<Proc: Architecture>(proc: &Proc, area: &MemoryMapEntry) -> Option<*mut u8> {
-    Some(
-        proc.physical_to_virtual_address::<u8>(PhysicalAddress::from_u64(
-            area.base_addr + area.length,
-        )?),
+fn memory_area_end<Proc: Architecture>(
+    proc: &Proc,
+    area: &MemoryMapEntry,
+) -> Result<*mut u8, TryFromIntError> {
+    Ok(
+        proc.physical_address_to_pointer::<u8>(
+            area.base_address()? + usize::try_from(area.length)?,
+        ),
     )
 }
 
@@ -194,8 +226,8 @@ fn memory_manager_executable<Proc: Architecture>(
         .tags_of_type::<BootModuleTag>()
         .find(|module| module.string.contains("memory_manager"))?;
     Some(
-        proc.physical_to_virtual_address(PhysicalAddress::from_u32(memory_manager.mod_start))
-            ..proc.physical_to_virtual_address(PhysicalAddress::from_u32(memory_manager.mod_end)),
+        proc.physical_address_to_pointer(memory_manager.mod_start)
+            ..proc.physical_address_to_pointer(memory_manager.mod_end),
     )
 }
 
@@ -211,13 +243,11 @@ fn unused_memory_regions_from_area<
     proc: &Proc,
     memory_area: &'a MemoryMapEntry,
     unused_memory_regions: RangeIter,
-) -> Option<impl Iterator<Item = Range<*mut u8>> + 'a> {
+) -> Result<impl Iterator<Item = Range<*mut u8>> + 'a, TryFromIntError> {
     let area = memory_area_start(proc, memory_area)?..memory_area_end(proc, memory_area)?;
-    Some(
-        unused_memory_regions
-            .map(move |region| intersect(area.clone(), region.clone()))
-            .filter(|region| !region.is_empty()),
-    )
+    Ok(unused_memory_regions
+        .map(move |region| intersect(area.clone(), region.clone()))
+        .filter(|region| !region.is_empty()))
 }
 
 fn unused_memory_regions(
@@ -241,5 +271,5 @@ fn available_memory_areas(memory_map: MemoryMapTag) -> impl Iterator<Item = &Mem
     memory_map
         .entries
         .iter()
-        .filter(|area| area.region_type == AVAILABLE_MEMORY || area.region_type == ACPI_MEMORY)
+        .filter(|area| area.memory_type() == AvailableMemory || area.memory_type() == AcpiMemory)
 }

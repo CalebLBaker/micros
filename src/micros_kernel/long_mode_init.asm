@@ -80,13 +80,13 @@ enable_interrupts:
     ret
 
 ; Args:
-; rdi: physical address of idt pointer
+; rdi: virtual address of idt pointer
 load_idt:
    lidt [rdi]
    ret
 
 ; Args:
-; rdi: physical address of gdt pointer
+; rdi: virtual address of gdt pointer
 load_gdt:
    lgdt [rdi]
    ret

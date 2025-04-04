@@ -4,10 +4,10 @@
 #![deny(clippy::pedantic)]
 #![allow(clippy::empty_loop)]
 
+use address::AddressMapper;
 use core::panic::PanicInfo;
 use framebuffer::StandardRgbFramebuffer;
 use multiboot2::{BootInformation, BootInformationHeader, FramebufferTag};
-use physical_address::AddressMapper;
 
 /// # Safety
 ///
@@ -41,7 +41,7 @@ unsafe fn get_framebuffer<AddrMap: AddressMapper>(
     unsafe {
         StandardRgbFramebuffer::from_tag(
             proc,
-            BootInformation::new(boot_info_ptr)
+            &BootInformation::new(boot_info_ptr)
                 .tags_of_type::<FramebufferTag>()
                 .next()?,
         )

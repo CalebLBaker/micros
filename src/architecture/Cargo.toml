@@ -7,5 +7,5 @@ license = "BSL-1.0"
 
 [dependencies]
 frame_allocation = { path = "../frame_allocation" }
-physical_address = { path = "../physical_address" }
+address = { path = "../address" }
 

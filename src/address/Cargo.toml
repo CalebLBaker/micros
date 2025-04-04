@@ -1,5 +1,5 @@
 [package]
-name = "physical_address"
+name = "address"
 version = "0.1.0"
 edition = "2024"
 authors = ["Caleb Baker <calebbaker774@gmail.com>"]

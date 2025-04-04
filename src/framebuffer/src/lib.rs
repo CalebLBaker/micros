@@ -2,9 +2,9 @@
 #![deny(clippy::all)]
 #![deny(clippy::pedantic)]
 
+use address::AddressMapper;
 use core::{mem::size_of, slice};
 use multiboot2::{FramebufferTag, aligned_pointer_cast};
-use physical_address::AddressMapper;
 
 pub enum Framebuffer<'a> {
     IndexedColor(IndexedColorFramebuffer<'a>),
@@ -18,12 +18,12 @@ impl<'a> Framebuffer<'a> {
     /// To avoid constructing an invalid framebuffer, the information contained in `tag` must be completely accurate.
     pub unsafe fn new<AddrMap: AddressMapper>(
         address_mapper: &AddrMap,
-        tag: FramebufferTag<'a>,
+        tag: &FramebufferTag<'a>,
     ) -> Option<Self> {
         let core = FramebufferCore {
             framebuffer: unsafe {
                 slice::from_raw_parts_mut(
-                    address_mapper.physical_to_virtual_address(tag.framebuffer),
+                    address_mapper.physical_address_to_pointer(tag.framebuffer),
                     tag.pitch as usize * tag.height as usize,
                 )
             },
@@ -108,7 +108,7 @@ impl<'a> StandardRgbFramebuffer<'a> {
     /// To avoid constructing an invalid framebuffer, the information contained in `tag` must be completely accurate.
     pub unsafe fn from_tag<AddrMap: AddressMapper>(
         address_mapper: &AddrMap,
-        tag: FramebufferTag<'a>,
+        tag: &FramebufferTag<'a>,
     ) -> Option<Self> {
         Self::new(unsafe { Framebuffer::new(address_mapper, tag) }?)
     }

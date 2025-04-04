@@ -9,5 +9,5 @@ license = "BSL-1.0"
 frame_allocation = { path = "../frame_allocation" }
 multiboot2 = { path = "../multiboot2" }
 framebuffer = { path = "../framebuffer" }
-physical_address = { path = "../physical_address" }
+address = { path = "../address" }
 architecture = { path = "../architecture" }

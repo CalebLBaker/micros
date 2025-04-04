@@ -1,4 +1,5 @@
-use crate::{ExecutableHeader, SegmentFlags, SegmentHeader};
+use crate::{ExecutableHeader, SegmentFlags, SegmentHeader, SegmentType};
+use address::VirtualAddress;
 use core::mem::size_of;
 
 #[repr(C)]
@@ -56,8 +57,8 @@ impl ExecutableHeader for Header {
         self.program_header_offset as usize
     }
 
-    fn entry(&self) -> usize {
-        self.entry as usize
+    fn entry(&self) -> VirtualAddress {
+        (self.entry as usize).into()
     }
 }
 
@@ -81,8 +82,8 @@ impl SegmentHeader for ProgramHeader {
         self.offset as usize
     }
 
-    fn segment_type(&self) -> u32 {
-        self.segment_type
+    fn segment_type(&self) -> SegmentType {
+        self.segment_type.into()
     }
 
     fn file_size(&self) -> usize {
@@ -93,8 +94,8 @@ impl SegmentHeader for ProgramHeader {
         self.memory_size as usize
     }
 
-    fn address(&self) -> usize {
-        self.virtual_address as usize
+    fn address(&self) -> VirtualAddress {
+        (self.virtual_address as usize).into()
     }
 
     fn flags(&self) -> SegmentFlags {

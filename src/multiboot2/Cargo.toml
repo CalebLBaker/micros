@@ -6,4 +6,4 @@ authors = ["Caleb Baker <calebbaker774@gmail.com>"]
 license = "BSL-1.0"
 
 [dependencies]
-physical_address = { path = "../physical_address" }
+address = { path = "../address" }

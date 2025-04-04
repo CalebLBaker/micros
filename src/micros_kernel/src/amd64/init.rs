@@ -1,4 +1,5 @@
 use crate::{
+    BootError,
     amd64::{
         apic,
         arch::{PROC, PageTableEntry, PageTableFlags},
@@ -9,6 +10,7 @@ use crate::{
     },
     boot_os,
 };
+use address::AddressMapper;
 use apic::{InterruptIndex, LOCAL_APIC_END, LOCAL_APIC_START};
 use core::ptr;
 use frame_allocation::{
@@ -16,7 +18,6 @@ use frame_allocation::{
     amd64::{FOUR_KILOBYTES, FourKbFrame},
 };
 use multiboot2::BootInformationHeader;
-use physical_address::AddressMapper;
 use ptr::{addr_of, addr_of_mut};
 
 #[repr(C, packed(2))]
@@ -36,19 +37,22 @@ pub struct InterruptServiceRoutine {
     _fake: u8,
 }
 
-pub unsafe fn initialize_operating_system(multiboot_info_ptr: u32, cpu_info: u32) -> Option<()> {
+pub unsafe fn initialize_operating_system(
+    multiboot_info_ptr: u32,
+    cpu_info: u32,
+) -> Result<(), BootError> {
     unsafe {
+        let proc = &mut *addr_of_mut!(PROC);
         p1_table_for_stack[0x001] = PageTableEntry::new(
-            addr_of!(DOUBLE_FAULT_STACK) as u64,
+            proc.kernel_mem_virtual_to_physical_address(addr_of!(DOUBLE_FAULT_STACK)),
             PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::NO_EXECUTE,
         );
 
         load_global_descriptor_table();
         reset_code_segment();
         load_tss();
-        setup_interrupts();
+        setup_interrupts(proc);
 
-        let proc = &mut *addr_of_mut!(PROC);
         if supports_gigabyte_pages(cpu_info) {
             proc.allocator
                 .four_kilobyte_pages
@@ -62,15 +66,15 @@ pub unsafe fn initialize_operating_system(multiboot_info_ptr: u32, cpu_info: u32
         let memory_manager_launch_info = boot_os(
             proc,
             boot_info_ptr,
-            proc.physical_to_virtual_address(LOCAL_APIC_START)
-                ..proc.physical_to_virtual_address(LOCAL_APIC_END),
+            proc.physical_address_to_pointer(LOCAL_APIC_START)
+                ..proc.physical_address_to_pointer(LOCAL_APIC_END),
         )?;
 
         launch_memory_manager(
             ptr::from_mut(proc),
             boot_info_ptr,
-            memory_manager_launch_info.root_page_table_address,
-            memory_manager_launch_info.entry_point,
+            memory_manager_launch_info.root_page_table_address.address,
+            memory_manager_launch_info.entry_point.address,
         );
     }
 }
@@ -356,7 +360,7 @@ fn supports_gigabyte_pages(cpu_info: u32) -> bool {
     (cpu_info & GIGABYTE_PAGES_CPUID_BIT) != 0
 }
 
-unsafe fn setup_interrupts() {
+unsafe fn setup_interrupts<AddrMap: AddressMapper>(address_mapper: &AddrMap) {
     let idt_ref = unsafe { &mut *{ (&raw mut IDT) } };
     idt_ref.breakpoint.set_address(addr_of!(breakpoint_handler));
     idt_ref
@@ -368,7 +372,7 @@ unsafe fn setup_interrupts() {
     unsafe {
         IDTR.offset = addr_of!(IDT);
         load_idt(addr_of!(IDTR));
-        apic::init();
+        apic::init(address_mapper);
         enable_interrupts();
     }
 }

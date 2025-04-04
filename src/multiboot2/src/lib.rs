@@ -2,17 +2,13 @@
 #![deny(clippy::all)]
 #![deny(clippy::pedantic)]
 
+use address::PhysicalAddress;
 use core::{
     mem::{align_of, size_of},
+    num::TryFromIntError,
     ops::Range,
     slice, str,
 };
-use physical_address::PhysicalAddress;
-
-/// The value of the `region_type` field for `MemoryMapEntry`'s that represent available memory.
-pub const AVAILABLE_MEMORY: u32 = 1;
-/// The value of the `region_type` field for `MemoryMapEntry`'s that represent ACPI memory.
-pub const ACPI_MEMORY: u32 = 3;
 
 /// A type that can represent a tag from the multiboot2 boot information structure.
 pub trait MutibootTag<'a>: TryFrom<&'a [u8]> {
@@ -31,12 +27,38 @@ pub struct BootInformationHeader {
 #[repr(C)]
 pub struct MemoryMapEntry {
     /// The address of the memory region
-    pub base_addr: u64,
+    base_addr: u64,
     /// The size of the memory region in bytes
     pub length: u64,
     /// The type of memory in the region (e.g. available memory or ACPI memory)
-    pub region_type: u32,
+    region_type: u32,
     reserved: u32,
+}
+
+impl MemoryMapEntry {
+    /// # Errors
+    ///
+    /// Returns Err(TryFromIntError{}) if the memory map entry does not point to a valid memory
+    /// address
+    pub fn base_address(&self) -> Result<PhysicalAddress, TryFromIntError> {
+        self.base_addr.try_into()
+    }
+
+    #[must_use]
+    pub const fn memory_type(&self) -> MemoryRegionType {
+        match self.region_type {
+            1 => MemoryRegionType::AvailableMemory,
+            3 => MemoryRegionType::AcpiMemory,
+            _ => MemoryRegionType::Other,
+        }
+    }
+}
+
+#[derive(PartialEq)]
+pub enum MemoryRegionType {
+    AvailableMemory,
+    AcpiMemory,
+    Other,
 }
 
 /// A multiboot2 tag containing a map of the device's memory
@@ -86,9 +108,9 @@ impl<'a> MutibootTag<'a> for MemoryMapTag<'a> {
 /// A multiboot2 info tag describing a boot module
 pub struct BootModuleTag<'a> {
     /// The address of the start of the boot module
-    pub mod_start: u32,
+    pub mod_start: PhysicalAddress,
     /// The address of the end of the boot module
-    pub mod_end: u32,
+    pub mod_end: PhysicalAddress,
     /// A string value affiliated with the boot module
     pub string: &'a str,
 }
@@ -103,8 +125,8 @@ impl<'a> TryFrom<&'a [u8]> for BootModuleTag<'a> {
             let header =
                 unsafe { &*aligned_pointer_cast::<BootModuleHeader>(value.as_ptr()).ok_or(())? };
             Ok(Self {
-                mod_start: header.mod_start,
-                mod_end: header.mod_end,
+                mod_start: header.mod_start.into(),
+                mod_end: header.mod_end.into(),
                 string: str::from_utf8(
                     value
                         .split_first_chunk::<{ size_of::<BootModuleHeader>() }>()
@@ -162,8 +184,11 @@ impl<'a> TryFrom<&'a [u8]> for FramebufferTag<'a> {
                     .ok_or(Self::Error::MisalignedData)?
             };
             Ok(Self {
-                framebuffer: PhysicalAddress::from_u64(header.framebuffer)
-                    .ok_or(Self::Error::InvalidAddress)?,
+                // framebuffer: (header.framebuffer as usize).into(),
+                framebuffer: header
+                    .framebuffer
+                    .try_into()
+                    .map_err(|_| FramebufferTagError::InvalidAddress)?,
                 pitch: header.pitch,
                 width: header.width,
                 height: header.height,
