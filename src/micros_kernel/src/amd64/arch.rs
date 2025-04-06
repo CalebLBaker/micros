@@ -20,9 +20,7 @@ pub static mut PROC: Amd64 = Amd64::new(
         gigabyte_pages: FfiOption::None,
     },
     VirtualAddress::new(0),
-    VirtualAddress::new(0),
-    VirtualAddress::new(0),
-    VirtualAddress::new(0),
+    0,
 );
 
 unsafe fn copy_into_address_space(

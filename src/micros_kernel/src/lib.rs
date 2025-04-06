@@ -78,10 +78,10 @@ unsafe fn boot_os<Proc: ArchitectureKernel>(
     // Initialize available memory and set up page tables
     let boot_info = unsafe { BootInformation::new(multiboot_info_ptr) };
 
-    // Add free frames from first 4 GB to available frame list
     let memory_manager_bounds =
         memory_manager_executable(proc, boot_info).ok_or(BootError::MemoryManagerNotLoaded)?;
 
+    // Add free frames from first 4 GB to available frame list
     let mut memory_regions_in_use_arr = [
         addr_of!(header_start)..addr_of!(kernel_end),
         boot_info.address_range(),

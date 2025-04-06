@@ -6,26 +6,23 @@ use frame_allocation::amd64::Amd64FrameAllocator;
 pub struct Amd64 {
     pub allocator: Amd64FrameAllocator,
     memory_offset: u64,
-    kernel_offset: u64,
-    memory_manager_offset: u64,
-    stack_offset: u64,
+    kernel_offset: i64,
 }
 
 impl Amd64 {
+    // Casting address offsets from u64 to i64 is safe since wrapping only occurs for 64-bit values
+    // and the address space is only 48 bits.
+    #[allow(clippy::cast_possible_wrap)]
     #[must_use]
     pub const fn new(
         allocator: Amd64FrameAllocator,
         memory_offset: VirtualAddress,
-        kernel_offset: VirtualAddress,
-        memory_manager_offset: VirtualAddress,
-        stack_offset: VirtualAddress,
+        kernel_offset: i64,
     ) -> Self {
         Self {
             allocator,
             memory_offset: memory_offset.address as u64,
-            kernel_offset: kernel_offset.address as u64,
-            memory_manager_offset: memory_manager_offset.address as u64,
-            stack_offset: stack_offset.address as u64,
+            kernel_offset: kernel_offset + memory_offset.address as i64,
         }
     }
 }
@@ -34,16 +31,14 @@ impl Amd64 {
 // safe
 #[allow(clippy::cast_possible_truncation)]
 impl Amd64 {
-    pub fn kernel_mem_virtual_to_physical_address<T>(
-        &self,
-        virtual_address: *const T,
-    ) -> PhysicalAddress {
-        (virtual_address as usize - self.kernel_offset as usize).into()
-    }
-
     #[must_use]
     pub fn mapped_physical_memory_start(&self) -> VirtualAddress {
         (self.memory_offset as usize).into()
+    }
+
+    #[must_use]
+    pub fn kernel_pointer_to_mapped_physical_memory_pointer<T>(&self, pointer: *mut T) -> *mut T {
+        (pointer as i64 + self.kernel_offset) as *mut T
     }
 }
 

@@ -13,11 +13,7 @@ use crate::{
 use address::AddressMapper;
 use apic::{InterruptIndex, LOCAL_APIC_END, LOCAL_APIC_START};
 use core::ptr;
-use frame_allocation::{
-    FfiOption, FrameAllocator,
-    amd64::{FOUR_KILOBYTES, FourKbFrame},
-};
-use multiboot2::BootInformationHeader;
+use frame_allocation::{FfiOption, FrameAllocator};
 use ptr::{addr_of, addr_of_mut};
 
 #[repr(C, packed(2))]
@@ -43,32 +39,38 @@ pub unsafe fn initialize_operating_system(
 ) -> Result<(), BootError> {
     unsafe {
         let proc = &mut *addr_of_mut!(PROC);
-        p1_table_for_stack[0x001] = PageTableEntry::new(
-            proc.kernel_mem_virtual_to_physical_address(addr_of!(DOUBLE_FAULT_STACK)),
-            PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::NO_EXECUTE,
-        );
-
         load_global_descriptor_table();
         reset_code_segment();
         load_tss();
         setup_interrupts(proc);
 
         if supports_gigabyte_pages(cpu_info) {
-            proc.allocator
-                .four_kilobyte_pages
-                .add_frame(addr_of!(p2_tables[0]) as *mut FourKbFrame);
-            proc.allocator
-                .four_kilobyte_pages
-                .add_frame(addr_of!(p2_tables[1]) as *mut FourKbFrame);
+            proc.allocator.four_kilobyte_pages.add_frame(
+                proc.kernel_pointer_to_mapped_physical_memory_pointer(addr_of_mut!(p2_tables[0]))
+                    .cast(),
+            );
+            proc.allocator.four_kilobyte_pages.add_frame(
+                proc.kernel_pointer_to_mapped_physical_memory_pointer(addr_of_mut!(p2_tables[1]))
+                    .cast(),
+            );
             proc.allocator.gigabyte_pages = FfiOption::Some(FrameAllocator::default());
         }
-        let boot_info_ptr = multiboot_info_ptr as *const BootInformationHeader;
+        let boot_info_ptr = proc.physical_address_to_pointer(multiboot_info_ptr.into());
         let memory_manager_launch_info = boot_os(
             proc,
             boot_info_ptr,
             proc.physical_address_to_pointer(LOCAL_APIC_START)
                 ..proc.physical_address_to_pointer(LOCAL_APIC_END),
         )?;
+
+        let double_fault_stack = proc
+            .allocator
+            .get_4k_frame()
+            .ok_or(BootError::OutOfMemory)?;
+        p1_table_for_stack[0x001] = PageTableEntry::new(
+            proc.pointer_to_physical_address(double_fault_stack),
+            PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::NO_EXECUTE,
+        );
 
         launch_memory_manager(
             ptr::from_mut(proc),
@@ -138,12 +140,9 @@ static mut GDTR: GdtDescriptor = GdtDescriptor {
     offset: ptr::null(),
 };
 
-static mut DOUBLE_FAULT_STACK: DoubleFaultStack = DoubleFaultStack([0; DOUBLE_FAULT_STACK_SIZE]);
-
 const GIGABYTE_PAGES_CPUID_BIT: u32 = 0x400_0000;
 
 const DOUBLE_FAULT_IST_INDEX: u8 = 0;
-const DOUBLE_FAULT_STACK_SIZE: usize = FOUR_KILOBYTES;
 
 const DOUBLE_FAULT_STACK_TOP: u64 = 0xffff_ffff_ffe0_2000;
 
@@ -344,9 +343,6 @@ impl InterruptDescriptorTable {
         &mut self.interrupts[(index - 0x20) as usize]
     }
 }
-
-#[repr(C, align(0x1000))]
-struct DoubleFaultStack([u8; DOUBLE_FAULT_STACK_SIZE]);
 
 unsafe fn load_global_descriptor_table() {
     unsafe {
